@@ -1,0 +1,1079 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>انقلاب</title>
+<style>
+  /* ————— تنسيق الصفحة: خلفية داكنة والكانفاس في النص ————— */
+  html, body { margin:0; padding:0; height:100%; background:#060a12; overflow:hidden; }
+  body { display:flex; align-items:center; justify-content:center; }
+  canvas {
+    max-width:100vw; max-height:100vh;
+    aspect-ratio:16/9;
+    box-shadow:0 0 60px rgba(40,80,160,.25);
+    outline:none;
+  }
+</style>
+</head>
+<body>
+<canvas id="game" width="960" height="540"></canvas>
+<script>
+'use strict';
+/* ============================================================
+   «انقلاب» — 2D platformer بقلب الجاذبية
+   ملف واحد: Canvas للرسم + Web Audio للصوت. بلا أي أصول خارجية.
+   الأقسام: CFG إعدادات · Snd صوت · LEVELS مراحل · محرك · رسم · إدخال
+   ============================================================ */
+
+/* ————————————————— CFG: كل الأرقام القابلة للضبط ————————————————— */
+const CFG = {
+  W: 960, H: 540,          // مقاس الشاشة
+  TILE: 36,                // مقاس البلاطة
+  PSIZE: 26,               // مقاس مربع اللاعب
+  RUN_ACC: 0.85,           // تسارع أفقي (وصول للسرعة القصوى في ~5 فريمات)
+  RUN_MAX: 4.2,            // أقصى سرعة أفقية
+  FRIC_GROUND: 0.62,       // احتكاك عند ترك الأزرار على الأرض (توقف مقرمش)
+  FRIC_AIR: 0.90,          // احتكاك في الهواء
+  GRAV: 0.7,               // تسارع الجاذبية
+  MAX_FALL: 13,            // أقصى سرعة سقوط
+  COYOTE: 7,               // coyote time بالفريمات (~0.12ث) بعد ترك الحافة
+  BUFFER: 8,               // flip buffering بالفريمات قبل الهبوط
+  FLIP_KICK: 2.5,          // دفعة أولية عند القلب
+  DEATH_FRAMES: 27,        // مدة توقف الموت قبل الإعادة (<نصف ثانية)
+  ENEMY_SPEED: 1.4,        // سرعة العدو الأفقي
+  ENEMY_SPEED_V: 1.6,      // سرعة العدو الرأسي
+  ENEMY_R: 13,             // نصف قطر العدو (الرسم)
+  ENEMY_HIT_R: 10,         // نصف قطر الإصابة (متسامح)
+  ENEMY_PATROL: 4,         // مدى الدورية بالبلاطات لكل اتجاه
+  STAR_R: 22,              // نصف قطر التقاط النجمة
+  PLAT_RANGE: 3 * 36,      // مسافة تنقّل المنصة المتحركة (بلاطات)
+  PLAT_SPEED_H: 1.35,      // سرعة المنصة الأفقية px/frame
+  PLAT_SPEED_V: 1.15,      // سرعة المنصة الرأسية
+  CRUMBLE_WARN: 26,        // فريمات إنذار قبل انهيار الأرض الهشّة
+  CRUMBLE_GONE: 80,        // فريمات غياب الأرض الهشّة قبل رجوعها
+  TRIP_COOLDOWN: 22,       // فريمات تهدئة بين قلبتي سلك متتاليتين
+};
+
+/* ————————————————— Snd: الصوت كله مولّد بالكود ————————————————— */
+const Snd = {
+  ctx: null, master: null, sfxBus: null, musBus: null,
+  muted: false, started: false,
+  _chordStep: 0, _nextChordT: 0,
+
+  // يبدأ عند أول تفاعل من المستخدم (المتصفح يمنع الصوت قبلها)
+  init() {
+    if (this.started) return;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    this.ctx = new AC();
+    this.master = this.ctx.createGain();
+    this.master.gain.value = this.muted ? 0 : 1;
+    this.master.connect(this.ctx.destination);
+    this.sfxBus = this.ctx.createGain(); this.sfxBus.gain.value = 0.28; this.sfxBus.connect(this.master);
+    this.musBus = this.ctx.createGain(); this.musBus.gain.value = 0.10; this.musBus.connect(this.master);
+    this.started = true;
+    this._startMusic();
+  },
+  resume() { if (this.ctx && this.ctx.state === 'suspended') this.ctx.resume(); },
+  toggleMute() {
+    this.muted = !this.muted;
+    if (this.master) this.master.gain.setTargetAtTime(this.muted ? 0 : 1, this.ctx.currentTime, 0.02);
+  },
+
+  // نغمة عامة: تردد بداية/نهاية، مدة، نوع موجة، مستوى، تأخير
+  _tone(f0, f1, dur, type, vol, when = 0, bus = null) {
+    if (!this.started) return;
+    const t = this.ctx.currentTime + when;
+    const o = this.ctx.createOscillator();
+    const g = this.ctx.createGain();
+    o.type = type;
+    o.frequency.setValueAtTime(f0, t);
+    if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(f1, 1), t + dur);
+    // envelope: هجوم سريع + خفوت — مايبقاش قاسي على الودن
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(bus || this.sfxBus);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+
+  /* —— مؤثرات —— */
+  flip(up)   { up ? this._tone(300, 620, 0.15, 'triangle', 0.9)
+                  : this._tone(620, 300, 0.15, 'triangle', 0.9); },
+  death()    { this._tone(400, 80, 0.3, 'sawtooth', 0.7); },
+  checkpoint(){ this._tone(523, 523, 0.12, 'sine', 0.8, 0);
+                this._tone(659, 659, 0.14, 'sine', 0.8, 0.1); },
+  winLevel() { [523, 659, 784, 1047].forEach((f, i) =>
+                this._tone(f, f, 0.14, 'sine', 0.8, i * 0.09)); },
+  land()     { this._tone(150, 90, 0.05, 'triangle', 0.35); },
+  crumble()  { this._tone(120, 60, 0.18, 'square', 0.25); },   // خشخشة انهيار
+  trip()     { this._tone(700, 480, 0.1, 'triangle', 0.5); },  // طنين سلك
+
+  /* —— موسيقى خلفية: لوب هادي 4 أكوردات (A minor) + pad + نغمات pentatonic متفرقة —— */
+  CHORDS: [
+    [110.00, 164.81, 220.00, 261.63],  // Am
+    [ 87.31, 130.81, 174.61, 220.00],  // F
+    [130.81, 196.00, 261.63, 329.63],  // C
+    [ 98.00, 146.83, 196.00, 246.94],  // G
+  ],
+  PENTA: [440, 523.25, 587.33, 659.25, 783.99], // A minor pentatonic للحن المتفرق
+  CHORD_DUR: 4, // ثواني لكل أكورد — تيمبو بطيء ومساحات صمت
+
+  _startMusic() {
+    this._nextChordT = this.ctx.currentTime + 0.15;
+    // scheduler بنظرة مستقبلية: نجدول اللي جاي قبلها بثانية
+    setInterval(() => {
+      if (!this.started) return;
+      while (this._nextChordT < this.ctx.currentTime + 1.2) {
+        this._playChord(this._chordStep % this.CHORDS.length, this._nextChordT, this._chordStep);
+        this._nextChordT += this.CHORD_DUR;
+        this._chordStep++;
+      }
+    }, 300);
+  },
+  _playChord(idx, t, step) {
+    const D = this.CHORD_DUR;
+    // نغمات الأكورد: sine بهجوم بطيء وخفوت طويل (متداخلة = إحساس pad)
+    this.CHORDS[idx].forEach((f, i) => {
+      this._padNote(f, t, D + 1.4, 0.14 - i * 0.02, 'sine');
+    });
+    // طبقة pad عميقة خافتة جداً: الجذر بأوكتاف أوطى
+    this._padNote(this.CHORDS[idx][0] / 2, t, D + 1.6, 0.07, 'triangle');
+    // لحن متفرق: نغمتين pentatonic في مواضع ثابتة من الأكورد
+    const n1 = this.PENTA[(step * 3 + 1) % 5], n2 = this.PENTA[(step * 2 + 3) % 5];
+    this._melNote(n1, t + 0.6);
+    if (step % 2 === 0) this._melNote(n2, t + 2.4); // مساحات صمت: مش كل مرة
+  },
+  _padNote(f, t, dur, vol, type) {
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = type; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 1.1);        // هجوم بطيء ناعم
+    g.gain.setValueAtTime(vol, t + dur - 1.6);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);     // خفوت طويل
+    o.connect(g); g.connect(this.musBus);
+    o.start(t); o.stop(t + dur + 0.1);
+  },
+  _melNote(f, t) {
+    const o = this.ctx.createOscillator(), g = this.ctx.createGain();
+    o.type = 'triangle'; o.frequency.value = f;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.05, t + 0.06);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.9);
+    o.connect(g); g.connect(this.musBus);
+    o.start(t); o.stop(t + 2);
+  },
+};
+
+/* ————————————————— LEVELS: المراحل — عدّل هنا براحتك —————————————————
+   كل مرحلة = اسم + شبكة نصوص. كل حرف بلاطة 36px:
+     #  كتلة صلبة        .  فراغ           P  بداية اللاعب
+     *  النجمة (نهاية)    C  checkpoint
+     ^  شوكة أرضية (تشاور لفوق)     v  شوكة سقفية (لتحت)
+     >  شوكة جدارية تشاور يمين      <  شوكة جدارية تشاور شمال
+     o  عدو أفقي (يمين/شمال)        I  عدو رأسي (فوق/تحت)
+     H  منصة متحركة أفقياً          V  منصة متحركة رأسياً  (تحمل اللاعب)
+     x  أرض هشّة (تنهار بعد ما تقف عليها بلحظة ثم ترجع)
+     T  سلك يقلب الجاذبية تلقائياً عند لمسه
+   لازم كل صفوف المرحلة الواحدة بنفس الطول. 15 صف = ارتفاع الشاشة.
+   الفلسفة: كل مرحلة تعلّم عنصر جديد في مكان آمن ثم تصعّبه، والأخيرة تدمج الكل. */
+const LEVELS = [
+  { name: 'المرحلة 1 — الخطوة', grid: [
+    "########################....#############....#",
+    "#............................................#",
+    "#............................................#",
+    "#............................................#",
+    "#............................................#",
+    "#............................................#",
+    "#............................................#",
+    "#............................................#",
+    "#............................................#",
+    "#............................................#",
+    "#............................................#",
+    "#............................................#",
+    "#............................................#",
+    "#.P.......C...............C................*.#",
+    "##############......##############......######",
+  ]},
+  { name: 'المرحلة 2 — الشوك', grid: [
+    "############################################################",
+    "#...............vv............vv..................vvv......#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#.P.....^^^.......C.................^^^^^^^^^^........C..*.#",
+    "#######################......###############################",
+  ]},
+  { name: "المرحلة 3 — الأسلاك", grid: [
+    "################################################################",
+    "#..............T..........T....vvvvvvT..........T..............#",
+    "#..............T..........T..........T..........T..............#",
+    "#..............T..........T..........T..........T..............#",
+    "#..............T..........T..........T..........T..............#",
+    "#..............T..........T..........T..........T..............#",
+    "#..............T..........T..........T..........T..............#",
+    "#..............T..........T..........T..........T..............#",
+    "#..............T..........T..........T..........T..............#",
+    "#..............T..........T..........T..........T..............#",
+    "#..............T..........T..........T..........T..............#",
+    "#..............T..........T..........T..........T..............#",
+    "#..............T..........T..........T..........T..............#",
+    "#.P.......C....T....^^^^^^T.....C....T....^^^^^^T......C....*..#",
+    "################################################################",
+  ]},
+  { name: "المرحلة 4 — الدوائر", grid: [
+    "############################################################",
+    "#..........................................................#",
+    "#...................I.....................I................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#.........................o...........o....................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#.P.....C.....^^^.....o.C.....^^^.....C......^^^..o.C...*..#",
+    "############################################################",
+  ]},
+  { name: "المرحلة 5 — المصاعد", grid: [
+    "############################################################",
+    "#.........vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv...............#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#.P.....C..............C..............C.............*......#",
+    "##########H...###########H...###########H...################",
+  ]},
+  { name: "المرحلة 6 — الأرض الهشّة", grid: [
+    "############################################################",
+    "#.........vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv..........#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#..........................................................#",
+    "#.P................C..........C..........C............*....#",
+    "##########xxxxxxxx###xxxxxxxx###xxxxxxxx###xxxxxx###########",
+  ]},
+  { name: "المرحلة 7 — الجدران", grid: [
+    "####################################################################",
+    "#......................>vvv<.......................>vvv<...........#",
+    "#..................................................................#",
+    "#..................................................................#",
+    "#..................................................................#",
+    "#..................................................................#",
+    "#..................................................................#",
+    "#..................................................................#",
+    "#..................................................................#",
+    "#..................................................................#",
+    "#..................................................................#",
+    "#..................................................................#",
+    "#..................................................................#",
+    "#.P...C..>^^^<..................C....>^^^<....C...............*....#",
+    "####################################################################",
+  ]},
+  { name: "المرحلة 8 — المِحنة", grid: [
+    "########################################################################################################",
+    "#...................T...........T......vvvvvv.....vvvvvvvv......vvvv...................................#",
+    "#...................T...........T.....................................I................................#",
+    "#...................T...........T......................................................................#",
+    "#...................T...........T......................................................................#",
+    "#...................T...........T......................................................................#",
+    "#...................T...........T......................................................................#",
+    "#...................T...........T...............o......................................................#",
+    "#...................T...........T......................................................................#",
+    "#...................T...........T......................................................................#",
+    "#...................T...........T......................................................................#",
+    "#...................T...........T......................................................................#",
+    "#...................T...........T......................................................................#",
+    "#.P...C...^^^...C...T....^^^^...T...C.........C.............C.......C...^^^^....C...o.......C.....*....#",
+    "########################################H...######xxxxxxxx##############################################",
+  ]},
+];
+
+/* ————————————————— حالة اللعبة ————————————————— */
+const G = {
+  state: 'menu',        // menu | play | dead | levelend | won
+  lvl: 0,
+  deaths: 0,
+  time: 0,              // فريمات لعب فعلية (للعداد النهائي)
+  tick: 0,             // ساعة المرحلة (تصفّر عند التحميل) — لحركة المنصات المحدَّدة
+  gravDir: 1,           // 1 لتحت، -1 لفوق
+  gravBlend: 0,         // 0..1 لتلوين الخلفية بسلاسة حسب الجاذبية
+  camX: 0,
+  shake: 0,
+  stateT: 0,            // عداد فريمات للحالة الحالية (موت/نهاية مرحلة)
+  flashT: 0,            // عرض اسم المرحلة
+  player: { x:0, y:0, vx:0, vy:0, grounded:false, coyote:0, buffer:0,
+            airT:0, rotT:1, rotFrom:0, squash:0, facing:1, ride:null, flipCD:0 },
+  level: null,          // نتيجة parseLevel
+  checkpoint: null,     // {x, y, grav}
+  particles: [],
+  debug: { noEnemies: false },
+};
+
+/* ————————————————— تحليل المرحلة ————————————————— */
+function parseLevel(idx) {
+  const grid = LEVELS[idx].grid;
+  const rows = grid.length, cols = grid[0].length;
+  const T = CFG.TILE;
+  const solid = [];
+  const spikes = [], enemies = [], checkpoints = [];
+  const platforms = [], crumble = [], crumbleMap = {}, trips = [];
+  let star = null, spawn = { x: T * 2, y: T * 2 };
+
+  const consumed = {}; // بلاطات المنصات المدموجة
+
+  for (let r = 0; r < rows; r++) {
+    solid[r] = [];
+    for (let c = 0; c < cols; c++) {
+      const ch = grid[r][c];
+      solid[r][c] = (ch === '#' || ch === 'x');  // الأرض الهشّة تبدأ صلبة
+      const x = c * T, y = r * T;
+      if (ch === '^') spikes.push({ r, c, type: 'up' });
+      if (ch === 'v') spikes.push({ r, c, type: 'down' });
+      if (ch === '>') spikes.push({ r, c, type: 'right' });
+      if (ch === '<') spikes.push({ r, c, type: 'left' });
+      if (ch === 'C') checkpoints.push({ r, c, active: false });
+      if (ch === '*') star = { x: x + T/2, y: y + T/2 };
+      if (ch === 'P') spawn = { x: x + T/2 - CFG.PSIZE/2, y: y + T - CFG.PSIZE };
+      if (ch === 'o') enemies.push(makeEnemy(grid, r, c, 'h'));
+      if (ch === 'I') enemies.push(makeEnemy(grid, r, c, 'v'));
+      if (ch === 'T') trips.push({ r, c });
+      if (ch === 'x') {
+        const o = { r, c, state: 'solid', timer: 0 };
+        crumble.push(o); crumbleMap[r + ',' + c] = o;
+      }
+      // منصات متحركة: ادمج البلاطات المتجاورة أفقياً في منصة واحدة
+      if ((ch === 'H' || ch === 'V') && !consumed[r + ',' + c]) {
+        let c2 = c;
+        while (c2 + 1 < cols && grid[r][c2 + 1] === ch) c2++;
+        for (let cc = c; cc <= c2; cc++) consumed[r + ',' + cc] = true;
+        platforms.push({
+          axis: ch === 'H' ? 'h' : 'v',
+          baseX: x, baseY: y, x, y, w: (c2 - c + 1) * T, h: T,
+          range: CFG.PLAT_RANGE,
+          speed: ch === 'H' ? CFG.PLAT_SPEED_H : CFG.PLAT_SPEED_V,
+          dx: 0, dy: 0,
+        });
+      }
+    }
+  }
+  return { rows, cols, solid, spikes, enemies, checkpoints, platforms, crumble, crumbleMap, trips,
+           star, spawn, w: cols * T, h: rows * T };
+}
+
+// عدو: أفقي (يمين/شمال) أو رأسي (فوق/تحت)، بمدى ±ENEMY_PATROL محدود بالكتل
+function makeEnemy(grid, r, c, axis) {
+  const T = CFG.TILE, R = CFG.ENEMY_R;
+  const passable = (rr, cc) => rr >= 0 && rr < grid.length && cc >= 0 && cc < grid[0].length && grid[rr][cc] !== '#' && grid[rr][cc] !== 'x';
+  const e = { axis, x: c * T + T/2, y: r * T + T/2, dir: 1, phase: (r * 7 + c) % 100 };
+  if (axis === 'h') {
+    let cl = c, cr = c;
+    for (let i = 0; i < CFG.ENEMY_PATROL; i++) { if (passable(r, cl - 1)) cl--; else break; }
+    for (let i = 0; i < CFG.ENEMY_PATROL; i++) { if (passable(r, cr + 1)) cr++; else break; }
+    e.minX = cl * T + R + 2; e.maxX = (cr + 1) * T - R - 2;
+    e.minY = e.y; e.maxY = e.y;
+  } else {
+    let ru = r, rd = r;
+    for (let i = 0; i < CFG.ENEMY_PATROL; i++) { if (passable(ru - 1, c)) ru--; else break; }
+    for (let i = 0; i < CFG.ENEMY_PATROL; i++) { if (passable(rd + 1, c)) rd++; else break; }
+    e.minY = ru * T + R + 2; e.maxY = (rd + 1) * T - R - 2;
+    e.minX = e.x; e.maxX = e.x;
+  }
+  return e;
+}
+
+function loadLevel(idx) {
+  G.lvl = idx;
+  G.level = parseLevel(idx);
+  G.tick = 0;
+  G.checkpoint = { x: G.level.spawn.x, y: G.level.spawn.y, grav: 1 };
+  G.gravDir = 1;
+  respawn();
+  G.camX = Math.max(0, Math.min(G.player.x - CFG.W/2, G.level.w - CFG.W));
+  G.state = 'play';
+  G.flashT = 90;
+}
+
+function respawn() {
+  const p = G.player, L = G.level;
+  p.x = G.checkpoint.x; p.y = G.checkpoint.y;
+  p.vx = 0; p.vy = 0;
+  G.gravDir = G.checkpoint.grav;
+  p.grounded = true; p.coyote = 0; p.buffer = 0; p.airT = 0;
+  p.rotT = 1; p.squash = 0; p.ride = null; p.flipCD = 0;
+  // رجّع الأرض الهشّة كلها لحالتها الصلبة عند الإعادة
+  if (L) for (const cb of L.crumble) { cb.state = 'solid'; cb.timer = 0; L.solid[cb.r][cb.c] = true; }
+}
+
+/* ————————————————— فيزياء وتصادم ————————————————— */
+function isSolid(level, r, c) {
+  if (c < 0 || c >= level.cols) return true;       // حيطان جانبية ضمنية
+  if (r < 0 || r >= level.rows) return false;      // فوق/تحت الشاشة = فراغ (موت)
+  return level.solid[r][c];
+}
+
+// تصادم AABB مع الشبكة، محور واحد في المرة
+function collideAxis(p, level, axis) {
+  const T = CFG.TILE, S = CFG.PSIZE;
+  const x0 = Math.floor(p.x / T), x1 = Math.floor((p.x + S - 0.01) / T);
+  const y0 = Math.floor(p.y / T), y1 = Math.floor((p.y + S - 0.01) / T);
+  let hit = 0;
+  for (let r = y0; r <= y1; r++) for (let c = x0; c <= x1; c++) {
+    if (!isSolid(level, r, c)) continue;
+    if (axis === 'x') {
+      if (p.vx > 0) p.x = c * T - S; else if (p.vx < 0) p.x = (c + 1) * T;
+      p.vx = 0; hit = 1;
+    } else {
+      if (p.vy > 0) { p.y = r * T - S; hit = 1; }
+      else if (p.vy < 0) { p.y = (r + 1) * T; hit = -1; }
+      p.vy = 0;
+    }
+    return hit;
+  }
+  return 0;
+}
+
+const aabb = (ax, ay, aw, ah, bx, by, bw, bh) =>
+  ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by;
+
+// تحديث مواضع المنصات المتحركة (ping-pong بسرعة ثابتة، محدَّد بـ G.tick)
+function updatePlatforms(L) {
+  for (const pl of L.platforms) {
+    const span = pl.range * 2;
+    let ph = (G.tick * pl.speed) % span;
+    const tri = ph <= pl.range ? ph : span - ph;   // 0..range..0
+    const nx = pl.axis === 'h' ? pl.baseX + tri : pl.baseX;
+    const ny = pl.axis === 'v' ? pl.baseY + tri : pl.baseY;
+    pl.dx = nx - pl.x; pl.dy = ny - pl.y;
+    pl.x = nx; pl.y = ny;
+  }
+}
+
+// تصادم اللاعب مع المنصات (تُعامَل كمستطيلات صلبة)
+function collidePlatformsX(p, L) {
+  const S = CFG.PSIZE;
+  for (const pl of L.platforms) {
+    if (!aabb(p.x, p.y, S, S, pl.x, pl.y, pl.w, pl.h)) continue;
+    if (p.vx > 0) { p.x = pl.x - S; p.vx = 0; }
+    else if (p.vx < 0) { p.x = pl.x + pl.w; p.vx = 0; }
+  }
+}
+function collidePlatformsY(p, L) {
+  const S = CFG.PSIZE;
+  let hit = 0;
+  for (const pl of L.platforms) {
+    if (!aabb(p.x, p.y, S, S, pl.x, pl.y, pl.w, pl.h)) continue;
+    if (p.vy > 0) { p.y = pl.y - S; p.vy = 0; hit = 1; if (G.gravDir > 0) p.ride = pl; }
+    else if (p.vy < 0) { p.y = pl.y + pl.h; p.vy = 0; hit = -1; if (G.gravDir < 0) p.ride = pl; }
+  }
+  return hit;
+}
+
+// إطلاق انهيار الأرض الهشّة الموجودة تحت قدمي اللاعب
+function triggerCrumbleUnder(p, L) {
+  const T = CFG.TILE, S = CFG.PSIZE;
+  const row = G.gravDir > 0 ? Math.floor((p.y + S + 1) / T) : Math.floor((p.y - 1) / T);
+  const cA = Math.floor(p.x / T), cB = Math.floor((p.x + S - 0.01) / T);
+  for (let c = cA; c <= cB; c++) {
+    const o = L.crumbleMap[row + ',' + c];
+    if (o && o.state === 'solid') { o.state = 'warn'; o.timer = CFG.CRUMBLE_WARN; Snd.crumble(); }
+  }
+}
+function updateCrumble(p, L) {
+  const T = CFG.TILE, S = CFG.PSIZE;
+  for (const o of L.crumble) {
+    if (o.state === 'warn') {
+      if (--o.timer <= 0) { o.state = 'gone'; o.timer = CFG.CRUMBLE_GONE; L.solid[o.r][o.c] = false; }
+    } else if (o.state === 'gone') {
+      if (--o.timer <= 0) {
+        // ماترجعش الأرض واللاعب واقف مكانها (يتحشر)
+        if (!aabb(p.x, p.y, S, S, o.c * T, o.r * T, T, T)) { o.state = 'solid'; L.solid[o.r][o.c] = true; }
+        else o.timer = 6;
+      }
+    }
+  }
+}
+
+function doFlip() {
+  const p = G.player;
+  G.gravDir *= -1;
+  p.vy = CFG.FLIP_KICK * G.gravDir;
+  p.grounded = false; p.coyote = 0; p.buffer = 0; p.ride = null;
+  p.rotFrom = G.gravDir > 0 ? Math.PI : 0;  // انيميشن دوران سريع
+  p.rotT = 0;
+  Snd.flip(G.gravDir < 0);
+  spawnBurst(p.x + CFG.PSIZE/2, p.y + CFG.PSIZE/2, 6, '#4de3ff', 2.5);
+}
+
+function killPlayer() {
+  if (G.state !== 'play') return;
+  G.state = 'dead'; G.stateT = 0;
+  G.deaths++;
+  G.shake = 14;
+  Snd.death();
+  spawnBurst(G.player.x + CFG.PSIZE/2, G.player.y + CFG.PSIZE/2, 22, '#ff5566', 5);
+}
+
+function updatePlay() {
+  const p = G.player, L = G.level, T = CFG.TILE, S = CFG.PSIZE;
+  G.time++; G.tick++;
+  if (p.flipCD > 0) p.flipCD--;
+
+  updatePlatforms(L);
+
+  /* —— حمل اللاعب على المنصة التي كان واقفاً عليها الفريم السابق —— */
+  const ride = p.ride;
+  if (ride) { p.x += ride.dx; p.y += ride.dy; }
+
+  /* —— حركة أفقية: تسارع قصير مقرمش —— */
+  const dir = (KEYS.right ? 1 : 0) - (KEYS.left ? 1 : 0);
+  if (dir !== 0) {
+    p.vx += dir * CFG.RUN_ACC;
+    p.vx = Math.max(-CFG.RUN_MAX, Math.min(CFG.RUN_MAX, p.vx));
+    p.facing = dir;
+  } else {
+    p.vx *= p.grounded ? CFG.FRIC_GROUND : CFG.FRIC_AIR;
+    if (Math.abs(p.vx) < 0.1) p.vx = 0;
+  }
+
+  /* —— جاذبية —— */
+  p.vy += CFG.GRAV * G.gravDir;
+  p.vy = Math.max(-CFG.MAX_FALL, Math.min(CFG.MAX_FALL, p.vy));
+
+  /* —— تحريك وتصادم (X ثم Y)، الشبكة ثم المنصات —— */
+  p.x += p.vx; collideAxis(p, L, 'x'); collidePlatformsX(p, L);
+  const wasGrounded = p.grounded;
+  p.y += p.vy;
+  const hitYg = collideAxis(p, L, 'y');
+  p.ride = null;
+  const hitYp = collidePlatformsY(p, L);   // يضبط p.ride عند الهبوط على منصة
+  const hitY = hitYp !== 0 ? hitYp : hitYg;
+  p.grounded = (hitY !== 0 && hitY === G.gravDir); // لمس السطح في اتجاه الجاذبية
+
+  if (p.grounded) {
+    p.coyote = CFG.COYOTE;
+    if (!wasGrounded && p.airT > 6) { // هبوط: squash + تراب + صوت
+      p.squash = 1;
+      Snd.land();
+      spawnBurst(p.x + S/2, p.y + (G.gravDir > 0 ? S : 0), 4, '#8aa7c7', 1.6);
+    }
+    p.airT = 0;
+    triggerCrumbleUnder(p, L);   // لمس أرض هشّة يبدأ انهيارها
+  } else {
+    if (p.coyote > 0) p.coyote--;   // coyote time: قلب متاح لحظات بعد الحافة
+    p.airT++;
+  }
+  updateCrumble(p, L);
+
+  /* —— القلب: فوري لو ممكن، وإلا buffer لحد الهبوط —— */
+  if (KEYS.flipPressed) {
+    KEYS.flipPressed = false;
+    if (p.grounded || p.coyote > 0) doFlip();
+    else p.buffer = CFG.BUFFER;      // flip buffering
+  } else if (p.buffer > 0) {
+    p.buffer--;
+    if (p.grounded) { doFlip(); }
+  }
+
+  /* —— انيميشن —— */
+  if (p.rotT < 1) p.rotT = Math.min(1, p.rotT + 1/11);
+  if (p.squash > 0) p.squash = Math.max(0, p.squash - 0.12);
+  G.gravBlend += ((G.gravDir < 0 ? 1 : 0) - G.gravBlend) * 0.08;
+
+  /* —— خروج عن الشاشة رأسياً = موت —— */
+  if (p.y < -60 || p.y > L.h + 60) { killPlayer(); return; }
+
+  /* —— الأسلاك: تقلب الجاذبية تلقائياً مع تهدئة —— */
+  for (const tw of L.trips) {
+    if (aabb(p.x, p.y, S, S, tw.c * T + 4, tw.r * T, T - 8, T)) {
+      if (p.flipCD <= 0) { doFlip(); p.flipCD = CFG.TRIP_COOLDOWN; Snd.trip(); }
+      break;
+    }
+  }
+
+  /* —— الشوك: hitbox أصغر من الرسم عشان العدل —— */
+  const px0 = p.x + 3, px1 = p.x + S - 3, py0 = p.y + 3, py1 = p.y + S - 3;
+  for (const s of L.spikes) {
+    const x = s.c * T, y = s.r * T;
+    let hx0, hx1, hy0, hy1;
+    if (s.type === 'up')         { hx0 = x + 9;  hx1 = x + 27; hy0 = y + 20; hy1 = y + 36; }
+    else if (s.type === 'down')  { hx0 = x + 9;  hx1 = x + 27; hy0 = y;      hy1 = y + 16; }
+    else if (s.type === 'right') { hx0 = x;      hx1 = x + 16; hy0 = y + 9;  hy1 = y + 27; }
+    else                         { hx0 = x + 20; hx1 = x + 36; hy0 = y + 9;  hy1 = y + 27; } // left
+    if (px1 > hx0 && px0 < hx1 && py1 > hy0 && py0 < hy1) { killPlayer(); return; }
+  }
+
+  /* —— الأعداء —— */
+  for (const e of L.enemies) {
+    if (e.axis === 'h') {
+      e.x += CFG.ENEMY_SPEED * e.dir;
+      if (e.x < e.minX) { e.x = e.minX; e.dir = 1; }
+      if (e.x > e.maxX) { e.x = e.maxX; e.dir = -1; }
+    } else {
+      e.y += CFG.ENEMY_SPEED_V * e.dir;
+      if (e.y < e.minY) { e.y = e.minY; e.dir = 1; }
+      if (e.y > e.maxY) { e.y = e.maxY; e.dir = -1; }
+    }
+    if (G.debug.noEnemies) continue;
+    const cx = Math.max(px0, Math.min(e.x, px1));
+    const cy = Math.max(py0, Math.min(e.y, py1));
+    const dx = e.x - cx, dy = e.y - cy;
+    if (dx*dx + dy*dy < CFG.ENEMY_HIT_R * CFG.ENEMY_HIT_R) { killPlayer(); return; }
+  }
+
+  /* —— checkpoints: تفعيل بالمرور، يخزن الجاذبية الحالية —— */
+  for (const cp of L.checkpoints) {
+    const cx = cp.c * T, cy = cp.r * T;
+    if (p.x + S > cx && p.x < cx + T && p.y + S > cy && p.y < cy + T) {
+      if (!cp.active) {
+        cp.active = true;
+        G.checkpoint = { x: cx + T/2 - S/2, y: cy + (G.gravDir > 0 ? T - S : 0), grav: G.gravDir };
+        Snd.checkpoint();
+        spawnBurst(cx + T/2, cy + T/2, 8, '#4dffa6', 2.5);
+      }
+    }
+  }
+
+  /* —— النجمة: نهاية المرحلة —— */
+  const st = L.star;
+  if (st) {
+    const dx = (p.x + S/2) - st.x, dy = (p.y + S/2) - st.y;
+    if (dx*dx + dy*dy < CFG.STAR_R * CFG.STAR_R * 2.2) {
+      G.state = 'levelend'; G.stateT = 0;
+      Snd.winLevel();
+      spawnBurst(st.x, st.y, 26, '#ffd94d', 4.5);
+    }
+  }
+
+  /* —— كاميرا —— */
+  const target = Math.max(0, Math.min(p.x - CFG.W/2 + S/2, L.w - CFG.W));
+  G.camX += (target - G.camX) * 0.15;
+}
+
+/* ————————————————— حلقة التحديث الرئيسية ————————————————— */
+function update() {
+  if (G.shake > 0) G.shake -= 1;
+  if (G.flashT > 0) G.flashT--;
+  updateParticles();
+
+  switch (G.state) {
+    case 'play': updatePlay(); break;
+    case 'dead':
+      G.stateT++;
+      if (G.stateT >= CFG.DEATH_FRAMES) { respawn(); G.state = 'play'; } // إعادة فورية
+      break;
+    case 'levelend':
+      G.stateT++;
+      if (G.stateT >= 55) {
+        if (G.lvl + 1 < LEVELS.length) loadLevel(G.lvl + 1);   // انتقال تلقائي
+        else G.state = 'won';
+      }
+      break;
+  }
+}
+
+function startGame() {
+  G.deaths = 0; G.time = 0;
+  loadLevel(0);
+}
+
+/* ————————————————— جسيمات ————————————————— */
+function spawnBurst(x, y, n, col, speed) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, v = (0.3 + Math.random() * 0.7) * speed;
+    G.particles.push({ x, y, vx: Math.cos(a)*v, vy: Math.sin(a)*v,
+                       life: 1, decay: 0.03 + Math.random()*0.03,
+                       col, size: 2 + Math.random()*3 });
+  }
+}
+function updateParticles() {
+  for (let i = G.particles.length - 1; i >= 0; i--) {
+    const p = G.particles[i];
+    p.x += p.vx; p.y += p.vy; p.vx *= 0.96; p.vy *= 0.96;
+    p.life -= p.decay;
+    if (p.life <= 0) G.particles.splice(i, 1);
+  }
+}
+
+/* ————————————————— الرسم ————————————————— */
+const cv = document.getElementById('game');
+const ctx = cv.getContext('2d');
+
+// لوحتا ألوان الخلفية: جاذبية لتحت (أزرق) / لفوق (بنفسجي)
+const BG_DOWN = { top: [11, 21, 38],  bot: [18, 35, 61]  };
+const BG_UP   = { top: [25, 15, 43],  bot: [43, 23, 71]  };
+const lerp = (a, b, t) => a + (b - a) * t;
+const lerpC = (c1, c2, t) => `rgb(${c1.map((v,i)=>Math.round(lerp(v,c2[i],t))).join(',')})`;
+
+// نجوم خلفية ثابتة (LCG بسيط عشان تبقى نفسها كل فريم)
+const STARS = (() => {
+  const arr = []; let s = 12345;
+  const rnd = () => (s = (s * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  for (let i = 0; i < 70; i++) arr.push({ x: rnd()*2400, y: rnd()*540, z: 0.15 + rnd()*0.3, r: 0.5 + rnd()*1.3 });
+  return arr;
+})();
+
+let frameCount = 0;
+
+function drawSpike(s, T) {
+  const x = s.c * T, y = s.r * T;
+  ctx.beginPath();
+  if (s.type === 'up')         { ctx.moveTo(x+2, y+T);   ctx.lineTo(x+T/2, y+T-22); ctx.lineTo(x+T-2, y+T); }
+  else if (s.type === 'down')  { ctx.moveTo(x+2, y);     ctx.lineTo(x+T/2, y+22);   ctx.lineTo(x+T-2, y); }
+  else if (s.type === 'right') { ctx.moveTo(x, y+2);     ctx.lineTo(x+22, y+T/2);   ctx.lineTo(x, y+T-2); }
+  else                         { ctx.moveTo(x+T, y+2);   ctx.lineTo(x+T-22, y+T/2); ctx.lineTo(x+T, y+T-2); }
+  ctx.closePath(); ctx.fill();
+}
+
+function render() {
+  frameCount++;
+  const t = G.gravBlend;
+  const W = CFG.W, H = CFG.H, T = CFG.TILE;
+
+  /* خلفية متدرجة بتتغير مع اتجاه الجاذبية */
+  const grad = ctx.createLinearGradient(0, 0, 0, H);
+  grad.addColorStop(0, lerpC(BG_DOWN.top, BG_UP.top, t));
+  grad.addColorStop(1, lerpC(BG_DOWN.bot, BG_UP.bot, t));
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, W, H);
+
+  /* نجوم بارالاكس خفيفة */
+  ctx.save();
+  for (const s of STARS) {
+    const sx = ((s.x - G.camX * s.z) % 2400 + 2400) % 2400 - 720;
+    if (sx < -10 || sx > W + 10) continue;
+    ctx.globalAlpha = 0.25 + 0.2 * Math.sin(frameCount * 0.03 + s.x);
+    ctx.fillStyle = '#cfe4ff';
+    ctx.fillRect(sx, s.y, s.r, s.r);
+  }
+  ctx.restore();
+
+  if (!G.level) { renderOverlays(); return; }
+
+  /* اهتزاز الشاشة */
+  ctx.save();
+  if (G.shake > 0) {
+    ctx.translate((Math.random()-0.5) * G.shake * 1.3, (Math.random()-0.5) * G.shake * 1.3);
+  }
+  ctx.translate(-Math.round(G.camX), 0);
+
+  const L = G.level;
+  const c0 = Math.max(0, Math.floor(G.camX / T) - 1);
+  const c1 = Math.min(L.cols - 1, Math.ceil((G.camX + W) / T) + 1);
+
+  /* البلاطات الصلبة (بلاطات الأرض الهشّة تُرسم منفصلة) */
+  const tileBase = lerpC([53, 80, 122], [74, 58, 120], t);
+  const tileEdge = lerpC([93, 138, 184], [130, 104, 190], t);
+  for (let r = 0; r < L.rows; r++) for (let c = c0; c <= c1; c++) {
+    if (!L.solid[r][c] || L.crumbleMap[r + ',' + c]) continue;
+    const x = c * T, y = r * T;
+    ctx.fillStyle = tileBase;
+    ctx.fillRect(x, y, T, T);
+    ctx.fillStyle = tileEdge;
+    if (!isSolid(L, r - 1, c)) ctx.fillRect(x, y, T, 3);
+    if (!isSolid(L, r + 1, c)) ctx.fillRect(x, y + T - 3, T, 3);
+  }
+
+  /* الأرض الهشّة: بنّية متشقّقة، تهتز وقت الإنذار، تبهت وهي غايبة */
+  for (const o of L.crumble) {
+    const x = o.c * T, y = o.r * T;
+    if (o.state === 'gone') {
+      ctx.globalAlpha = 0.12; ctx.fillStyle = '#6b5030';
+      ctx.fillRect(x + 3, y + 3, T - 6, T - 6); ctx.globalAlpha = 1;
+      continue;
+    }
+    let jx = 0, jy = 0;
+    if (o.state === 'warn') { jx = (Math.random()-0.5)*3; jy = (Math.random()-0.5)*3; }
+    ctx.fillStyle = o.state === 'warn' ? '#b5763a' : '#8a5f34';
+    ctx.fillRect(x + jx, y + jy, T, T);
+    ctx.strokeStyle = 'rgba(30,18,8,0.6)'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x + 8 + jx, y + jy); ctx.lineTo(x + 14 + jx, y + 18 + jy); ctx.lineTo(x + 6 + jx, y + T + jy);
+    ctx.moveTo(x + 24 + jx, y + jy); ctx.lineTo(x + 20 + jx, y + 16 + jy); ctx.lineTo(x + 28 + jx, y + T + jy);
+    ctx.stroke();
+  }
+
+  /* المنصات المتحركة: مستطيل فولاذي بسهمين يوضّحان اتجاه الحركة */
+  for (const pl of L.platforms) {
+    ctx.fillStyle = '#3b6ea5';
+    ctx.fillRect(pl.x, pl.y, pl.w, pl.h);
+    ctx.fillStyle = '#6fa8dc';
+    ctx.fillRect(pl.x, pl.y, pl.w, 3);
+    ctx.fillRect(pl.x, pl.y + pl.h - 3, pl.w, 3);
+    ctx.fillStyle = 'rgba(230,240,255,0.55)';
+    const cxp = pl.x + pl.w/2, cyp = pl.y + pl.h/2;
+    ctx.beginPath();
+    if (pl.axis === 'h') {
+      ctx.moveTo(cxp-10, cyp); ctx.lineTo(cxp-4, cyp-5); ctx.lineTo(cxp-4, cyp+5);
+      ctx.moveTo(cxp+10, cyp); ctx.lineTo(cxp+4, cyp-5); ctx.lineTo(cxp+4, cyp+5);
+    } else {
+      ctx.moveTo(cxp, cyp-9); ctx.lineTo(cxp-5, cyp-3); ctx.lineTo(cxp+5, cyp-3);
+      ctx.moveTo(cxp, cyp+9); ctx.lineTo(cxp-5, cyp+3); ctx.lineTo(cxp+5, cyp+3);
+    }
+    ctx.fill();
+  }
+
+  /* الأسلاك: خط متقطّع متوهّج يعبر البلاطة عرضياً */
+  for (const tw of L.trips) {
+    const x = tw.c * T, y = tw.r * T, cy = y + T/2;
+    ctx.strokeStyle = '#c58bff';
+    ctx.globalAlpha = 0.5 + 0.4 * Math.sin(frameCount * 0.15 + tw.c);
+    ctx.lineWidth = 2.5;
+    ctx.setLineDash([6, 5]);
+    ctx.beginPath(); ctx.moveTo(x, cy); ctx.lineTo(x + T, cy); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+    // سهمان صغيران فوق/تحت يرمزان للقلب
+    ctx.fillStyle = 'rgba(197,139,255,0.9)';
+    ctx.beginPath();
+    ctx.moveTo(x+T/2, y+6); ctx.lineTo(x+T/2-4, y+12); ctx.lineTo(x+T/2+4, y+12);
+    ctx.moveTo(x+T/2, y+T-6); ctx.lineTo(x+T/2-4, y+T-12); ctx.lineTo(x+T/2+4, y+T-12);
+    ctx.fill();
+  }
+
+  /* الشوك: مثلثات (أربع اتجاهات) */
+  ctx.fillStyle = '#ff5566';
+  for (const s of L.spikes) drawSpike(s, T);
+
+  /* checkpoints: عمود + علم — رمادي، وأخضر لما يتفعّل */
+  for (const cp of L.checkpoints) {
+    const x = cp.c * T, y = cp.r * T;
+    const onCeil = isSolid(L, cp.r - 1, cp.c) && !isSolid(L, cp.r + 1, cp.c);
+    ctx.fillStyle = cp.active ? '#4dffa6' : '#5a6f8a';
+    if (onCeil) {
+      ctx.fillRect(x + 13, y, 4, 26);
+      ctx.beginPath();
+      ctx.moveTo(x + 17, y + 26); ctx.lineTo(x + 29, y + 20); ctx.lineTo(x + 17, y + 14);
+      ctx.closePath(); ctx.fill();
+    } else {
+      ctx.fillRect(x + 13, y + T - 26, 4, 26);
+      ctx.beginPath();
+      ctx.moveTo(x + 17, y + T - 26); ctx.lineTo(x + 29, y + T - 20); ctx.lineTo(x + 17, y + T - 14);
+      ctx.closePath(); ctx.fill();
+    }
+    if (cp.active) {
+      ctx.globalAlpha = 0.25 + 0.15 * Math.sin(frameCount * 0.1);
+      ctx.beginPath(); ctx.arc(x + T/2, y + T/2, 16, 0, Math.PI * 2); ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+  }
+
+  /* الأعداء: دوائر نابضة (أفقي برتقالي، رأسي بنفسجي) */
+  for (const e of L.enemies) {
+    const pr = CFG.ENEMY_R + Math.sin((frameCount + e.phase) * 0.12) * 1.5;
+    const vertical = e.axis === 'v';
+    ctx.fillStyle = vertical ? '#c774ff' : '#ff9f43';
+    ctx.beginPath(); ctx.arc(e.x, e.y, pr, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = vertical ? '#7a2fb0' : '#b3541e';
+    const ox = vertical ? 0 : e.dir * 3, oy = vertical ? e.dir * 3 : 0;
+    ctx.beginPath(); ctx.arc(e.x + ox, e.y + oy, pr * 0.45, 0, Math.PI * 2); ctx.fill();
+  }
+
+  /* النجمة: خماسية دوّارة متوهجة */
+  if (L.star) {
+    const st = L.star, rot = frameCount * 0.02;
+    const pulse = 1 + 0.08 * Math.sin(frameCount * 0.08);
+    ctx.save();
+    ctx.translate(st.x, st.y); ctx.rotate(rot); ctx.scale(pulse, pulse);
+    ctx.globalAlpha = 0.18;
+    ctx.fillStyle = '#ffd94d';
+    ctx.beginPath(); ctx.arc(0, 0, 26, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.beginPath();
+    for (let i = 0; i < 10; i++) {
+      const rr = i % 2 === 0 ? 15 : 6.5;
+      const a = i * Math.PI / 5 - Math.PI / 2;
+      ctx[i === 0 ? 'moveTo' : 'lineTo'](Math.cos(a) * rr, Math.sin(a) * rr);
+    }
+    ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
+
+  /* الجسيمات */
+  for (const p of G.particles) {
+    ctx.globalAlpha = Math.max(0, p.life);
+    ctx.fillStyle = p.col;
+    ctx.fillRect(p.x - p.size/2, p.y - p.size/2, p.size, p.size);
+  }
+  ctx.globalAlpha = 1;
+
+  /* اللاعب: مربع بدوران عند القلب + squash عند الهبوط */
+  if (G.state !== 'dead') {
+    const p = G.player, S = CFG.PSIZE;
+    const rot = (1 - p.rotT) * Math.PI * p.facing; // دوران سريع أثناء القلب
+    const sq = 1 - p.squash * 0.3;
+    ctx.save();
+    ctx.translate(p.x + S/2, p.y + S/2);
+    ctx.rotate(rot);
+    ctx.scale(1 / sq * (p.squash > 0 ? 1.15 : 1), sq);
+    ctx.fillStyle = '#4de3ff';
+    ctx.fillRect(-S/2, -S/2, S, S);
+    ctx.fillStyle = '#0b2a3a';
+    const ey = G.gravDir > 0 ? -4 : 4 - 3;
+    ctx.fillRect(p.facing * 4 - 2, ey, 3.5, 3.5);
+    ctx.fillRect(p.facing * 10 - 2, ey, 3.5, 3.5);
+    ctx.restore();
+  }
+
+  ctx.restore(); // نهاية الكاميرا
+
+  renderHUD();
+  renderOverlays();
+}
+
+function renderHUD() {
+  if (G.state === 'menu' || G.state === 'won') return;
+  ctx.save();
+  // نص بظل بدل شريط معتم — عشان صف السقف يفضل مقروء
+  ctx.shadowColor = 'rgba(0,0,0,0.85)';
+  ctx.shadowBlur = 5;
+  ctx.fillStyle = '#cfe4ff';
+  ctx.font = '15px "Segoe UI", sans-serif';
+  ctx.textAlign = 'right';
+  ctx.fillText(`المرحلة ${G.lvl + 1}/${LEVELS.length}`, CFG.W - 14, 22);
+  ctx.textAlign = 'left';
+  ctx.fillText(`الموتات: ${G.deaths}`, 14, 22);
+  if (Snd.muted) { ctx.textAlign = 'center'; ctx.fillText('صامت', CFG.W/2, 22); }
+  // سطر التحكم — يظهر في المرحلة الأولى بس
+  if (G.lvl === 0) {
+    ctx.globalAlpha = 0.5;
+    ctx.textAlign = 'center';
+    ctx.font = '13px "Segoe UI", sans-serif';
+    ctx.fillText('أسهم / A D — حركة · مسافة — قلب الجاذبية · R — إعادة · M — صوت', CFG.W/2, CFG.H - 12);
+  }
+  // اسم المرحلة عند البداية
+  if (G.flashT > 0) {
+    ctx.globalAlpha = Math.min(1, G.flashT / 30);
+    ctx.fillStyle = '#eaf3ff';
+    ctx.font = 'bold 26px "Segoe UI", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.fillText(LEVELS[G.lvl].name, CFG.W/2, 110);
+  }
+  ctx.restore();
+}
+
+function renderOverlays() {
+  ctx.save();
+  ctx.textAlign = 'center';
+  if (G.state === 'menu') {
+    ctx.fillStyle = '#eaf3ff';
+    ctx.font = 'bold 72px "Segoe UI", sans-serif';
+    ctx.fillText('انقلاب', CFG.W/2, 190);
+    ctx.font = '20px "Segoe UI", sans-serif';
+    ctx.fillStyle = '#8fb3d9';
+    ctx.fillText('مربع بيقلب الجاذبية. وصّله للنجمة.', CFG.W/2, 245);
+    ctx.font = '15px "Segoe UI", sans-serif';
+    ctx.globalAlpha = 0.65;
+    ctx.fillText('8 مراحل · أسلاك · منصات متحركة · أرض هشّة · أعداء', CFG.W/2, 288);
+    ctx.fillText('أسهم / A D — حركة · مسافة — قلب الجاذبية · R — إعادة · M — صوت', CFG.W/2, 320);
+    ctx.globalAlpha = 0.6 + 0.4 * Math.sin(frameCount * 0.06);
+    ctx.fillStyle = '#4de3ff';
+    ctx.font = 'bold 22px "Segoe UI", sans-serif';
+    ctx.fillText('اضغط أي زر', CFG.W/2, 400);
+  } else if (G.state === 'levelend') {
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = '#eaf3ff';
+    ctx.font = 'bold 40px "Segoe UI", sans-serif';
+    ctx.fillText('تمام.', CFG.W/2, CFG.H/2 - 20);
+  } else if (G.state === 'won') {
+    ctx.fillStyle = 'rgba(6,10,18,0.75)';
+    ctx.fillRect(0, 0, CFG.W, CFG.H);
+    ctx.fillStyle = '#ffd94d';
+    ctx.font = 'bold 56px "Segoe UI", sans-serif';
+    ctx.fillText('خلصت.', CFG.W/2, 200);
+    ctx.fillStyle = '#cfe4ff';
+    ctx.font = '22px "Segoe UI", sans-serif';
+    const mm = Math.floor(G.time / 3600), ss = Math.floor((G.time / 60) % 60);
+    ctx.fillText(`الموتات: ${G.deaths}`, CFG.W/2, 275);
+    ctx.fillText(`الوقت: ${mm}:${ss < 10 ? '0' : ''}${ss}`, CFG.W/2, 310);
+    ctx.globalAlpha = 0.7;
+    ctx.font = '18px "Segoe UI", sans-serif';
+    ctx.fillText('R — من الأول', CFG.W/2, 385);
+  }
+  ctx.restore();
+}
+
+/* ————————————————— الإدخال ————————————————— */
+const KEYS = { left: false, right: false, flipPressed: false };
+
+function handleKey(code, down, repeat) {
+  // أول تفاعل: تشغيل الصوت (قيود المتصفح) وبدء اللعبة
+  if (down) { Snd.init(); Snd.resume(); }
+  if (down && !repeat && G.state === 'menu') { startGame(); return; }
+
+  switch (code) {
+    case 'ArrowLeft': case 'KeyA': KEYS.left = down; break;
+    case 'ArrowRight': case 'KeyD': KEYS.right = down; break;
+    case 'Space': case 'ArrowUp': case 'KeyW':
+      if (down && !repeat) KEYS.flipPressed = true;
+      break;
+    case 'KeyR':
+      if (down && !repeat) {
+        if (G.state === 'won') startGame();               // من الأول
+        else if (G.state === 'play' || G.state === 'dead') loadLevel(G.lvl); // إعادة المرحلة
+      }
+      break;
+    case 'KeyM':
+      if (down && !repeat) Snd.toggleMute();
+      break;
+  }
+}
+
+window.addEventListener('keydown', e => {
+  if (['Space','ArrowUp','ArrowDown','ArrowLeft','ArrowRight'].includes(e.code)) e.preventDefault();
+  handleKey(e.code, true, e.repeat);
+});
+window.addEventListener('keyup', e => handleKey(e.code, false, false));
+// كليك = بدء/قلب (يفكّ قفل الصوت برضه)
+window.addEventListener('pointerdown', () => {
+  Snd.init(); Snd.resume();
+  if (G.state === 'menu') startGame();
+  else KEYS.flipPressed = true;
+});
+
+/* ————————————————— حلقة اللعبة: خطوة ثابتة 60Hz ————————————————— */
+const STEP = 1000 / 60;
+let acc = 0, last = performance.now();
+function frame(now) {
+  acc += Math.min(now - last, 100);
+  last = now;
+  while (acc >= STEP) { update(); acc -= STEP; }
+  render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+
+/* واجهة للاختبار الآلي (headless) — مش بتأثر على اللعب */
+window.GAME = { G, CFG, LEVELS, KEYS, loadLevel, startGame, update, render, handleKey, parseLevel,
+                doFlip, isSolid };
+</script>
+</body>
+</html>
