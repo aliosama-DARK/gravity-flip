@@ -347,7 +347,7 @@ const G = {
   gravDir:1, gravBlend:0, camX:0, shake:0, stateT:0, flashT:0, msgT:0,
   ammo:0, gateOpen:false,
   player:{ x:0,y:0, vx:0,vy:0, grounded:false, coyote:0, buffer:0, airT:0,
-           rotT:1, rotFrom:0, squash:0, facing:1, ride:null, flipCD:0, fireCD:0, aim:0 },
+           rotT:1, rotFrom:0, squash:0, facing:1, ride:null, flipCD:0, fireCD:0, aim:0, idleBob:0 },
   level:null, checkpoint:null,
   bullets:[], ebullets:[], particles:[], boss:null,
   killed:null,     // Set لأعداء ماتوا (يفضلوا موتى عبر الإعادات)
@@ -450,7 +450,7 @@ function respawn(){
   const p=G.player, L=G.level;
   p.x=G.checkpoint.x; p.y=G.checkpoint.y; p.vx=0; p.vy=0;
   G.gravDir=G.checkpoint.grav;
-  p.grounded=true; p.coyote=0; p.buffer=0; p.airT=0; p.rotT=1; p.squash=0; p.ride=null; p.flipCD=0; p.fireCD=0;
+  p.grounded=true; p.coyote=0; p.buffer=0; p.airT=0; p.rotT=1; p.squash=0; p.ride=null; p.flipCD=0; p.fireCD=0; p.idleBob=0;
   G.bullets=[]; G.ebullets=[];
   if (L){
     for (const cb of L.crumble){ cb.state='solid'; cb.timer=0; L.solid[cb.r][cb.c]=true; }
@@ -636,7 +636,7 @@ function updateTyrant(L,p,bo){
   const dir = Math.sign(pcx - bo.x);
   bo.x += dir * CFG.TYRANT_TRACK * (bo.phase===2?1.35:1);
   bo.x = Math.max(T+bo.r, Math.min(L.w-T-bo.r, bo.x));
-  bo.spin += 0.03;
+  bo.spin += 0.016 + 0.04*(1 - bo.hp/bo.maxHp);
   bo.atkT++;
   const period = bo.phase===2 ? CFG.TYRANT_ATK_PERIOD*0.62 : CFG.TYRANT_ATK_PERIOD;
   if(bo.windup>0){ bo.windup--;
@@ -683,6 +683,7 @@ function updateEbullets(L,p){
 function updatePlay(){
   const p=G.player, L=G.level, T=CFG.TILE, S=CFG.PSIZE;
   G.time++; G.tick++;
+  p.idleBob += 0.06 + (Math.abs(p.vx)>0.5?0.08:0);
   if(p.flipCD>0) p.flipCD--;
   if(p.fireCD>0) p.fireCD--;
   if(G.msgT>0) G.msgT--;
@@ -908,8 +909,13 @@ function render(){
   for(const e of L.enemies){ if(!e.alive) continue;
     const pr=CFG.ENEMY_R+Math.sin((frameCount+e.phase)*0.12)*1.5, vertical=e.axis==='v';
     ctx.fillStyle=vertical?'#c774ff':'#ff9f43'; ctx.beginPath(); ctx.arc(e.x,e.y,pr,0,7); ctx.fill();
-    ctx.fillStyle=vertical?'#7a2fb0':'#b3541e'; const ox=vertical?0:e.dir*3, oy=vertical?e.dir*3:0;
-    ctx.beginPath(); ctx.arc(e.x+ox,e.y+oy,pr*0.45,0,7); ctx.fill(); }
+    // عين تتابع اللاعب
+    const pcx=G.player.x+CFG.PSIZE/2, pcy=G.player.y+CFG.PSIZE/2;
+    const ea = Math.atan2(pcy-e.y, pcx-e.x);
+    const ed = Math.min(pr*0.35, 5);
+    const eox = Math.cos(ea)*ed, eoy = Math.sin(ea)*ed;
+    ctx.fillStyle=vertical?'#7a2fb0':'#b3541e';
+    ctx.beginPath(); ctx.arc(e.x+eox, e.y+eoy, pr*0.35, 0, 7); ctx.fill(); }
 
   // طلقات العدو
   for(const b of G.ebullets){ ctx.fillStyle='#ff884d'; ctx.beginPath(); ctx.arc(b.x,b.y,CFG.EBULLET_R,0,7); ctx.fill();
@@ -939,14 +945,28 @@ function render(){
   // اللاعب + المسدس
   if(G.state!=='dead'){ const p=G.player, S=CFG.PSIZE;
     const rot=(1-p.rotT)*Math.PI*p.facing, sq=1-p.squash*0.3;
-    const cx=p.x+S/2, cy=p.y+S/2;
+    const idleY = Math.sin(p.idleBob)*1.2;
+    const cx=p.x+S/2, cy=p.y+S/2+idleY;
+    // ارتداد المسدس عند الإطلاق
+    const kick = p.fireCD > 6 ? (p.fireCD - 6)*0.7 : 0;
     // ماسورة المسدس ناحية التصويب
     ctx.save(); ctx.translate(cx,cy); ctx.rotate(p.aim);
-    ctx.fillStyle='#0b2a3a'; ctx.fillRect(6,-3.5,18,7);
-    ctx.fillStyle='#cfe4ff'; ctx.fillRect(20,-3.5,4,7); ctx.restore();
-    // الجسم
+    ctx.fillStyle='#0b2a3a'; ctx.fillRect(6-kick,-3.5,18,7);
+    ctx.fillStyle='#cfe4ff'; ctx.fillRect(20-kick,-3.5,4,7); ctx.restore();
+    // الجسم + الرجلين
     ctx.save(); ctx.translate(cx,cy); ctx.rotate(rot); ctx.scale(1/sq*(p.squash>0?1.15:1),sq);
     ctx.fillStyle=th.player; ctx.fillRect(-S/2,-S/2,S,S);
+    // الرجلين — تهتز أثناء الركض
+    const legSwing = p.grounded ? Math.sin(p.idleBob*2)*4 : 0;
+    ctx.fillStyle='#0b2a3a';
+    if(G.gravDir>0){
+      ctx.fillRect(-6, S/2-2, 4, 6+legSwing);
+      ctx.fillRect(2, S/2-2, 4, 6-legSwing);
+    } else {
+      ctx.fillRect(-6, -S/2-8-legSwing, 4, 6+legSwing);
+      ctx.fillRect(2, -S/2-8+legSwing, 4, 6-legSwing);
+    }
+    // العينين
     ctx.fillStyle='#0b2a3a'; const ey=G.gravDir>0?-4:1;
     ctx.fillRect(p.facing*4-2,ey,3.5,3.5); ctx.fillRect(p.facing*10-2,ey,3.5,3.5); ctx.restore();
   }
@@ -969,8 +989,13 @@ function drawBoss(bo){
   const gl = warn ? (0.4+0.4*Math.sin(frameCount*0.6)) : 0.2;
   ctx.globalAlpha=gl; ctx.fillStyle= warn?'#ff5566':'#ff9f43'; ctx.beginPath(); ctx.arc(0,0,bo.r+12,0,7); ctx.fill(); ctx.globalAlpha=1;
   ctx.fillStyle= flash?'#ffffff' : (bo.phase===2?'#ff5f6d':'#e0673a'); ctx.beginPath(); ctx.arc(0,0,bo.r,0,7); ctx.fill();
+  // نواة
   ctx.fillStyle='#2a0d0d'; ctx.beginPath(); ctx.arc(0,0,bo.r*0.5,0,7); ctx.fill();
+  // وهج العين
   ctx.fillStyle= warn?'#ffe14d':'#ffb0b0'; ctx.beginPath(); ctx.arc(0,0,bo.r*0.22,0,7); ctx.fill();
+  // بؤبؤ يتابع اللاعب
+  const ba = Math.atan2(G.player.y+CFG.PSIZE/2-bo.y, G.player.x+CFG.PSIZE/2-bo.x);
+  ctx.fillStyle='#1a0505'; ctx.beginPath(); ctx.arc(Math.cos(ba)*bo.r*0.2, Math.sin(ba)*bo.r*0.2, bo.r*0.1, 0, 7); ctx.fill();
   ctx.restore();
 }
 // الطاغية: نجمة/ماسة شائكة بنفسجية دوّارة بعين — شكل مختلف تماماً عن الحارس
@@ -992,7 +1017,9 @@ function drawTyrant(bo){
   // نواة داكنة + عين
   ctx.fillStyle='#1a0a2e'; ctx.beginPath(); ctx.arc(0,0,bo.r*0.5,0,7); ctx.fill();
   ctx.fillStyle= warn?'#ffe14d':'#e0b0ff'; ctx.beginPath(); ctx.arc(0,0,bo.r*0.24,0,7); ctx.fill();
-  ctx.fillStyle='#1a0a2e'; ctx.beginPath(); ctx.arc(0,0,bo.r*0.1,0,7); ctx.fill();
+  // بؤبؤ يتابع اللاعب
+  const ta = Math.atan2(G.player.y+CFG.PSIZE/2-bo.y, G.player.x+CFG.PSIZE/2-bo.x);
+  ctx.fillStyle='#0a0520'; ctx.beginPath(); ctx.arc(Math.cos(ta)*bo.r*0.18, Math.sin(ta)*bo.r*0.18, bo.r*0.09, 0, 7); ctx.fill();
   ctx.restore();
 }
 
