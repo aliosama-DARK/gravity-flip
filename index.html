@@ -5,12 +5,15 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>انقلاب · FLIP</title>
 <style>
-  html, body { margin:0; padding:0; height:100%; background:#060a12; overflow:hidden; }
+  html, body { margin:0; padding:0; width:100%; height:100%; background:#060a12; overflow:hidden; touch-action:manipulation; }
   body { display:flex; align-items:center; justify-content:center; }
   canvas {
     max-width:100vw; max-height:100vh; aspect-ratio:16/9;
     box-shadow:0 0 60px rgba(40,80,160,.25); outline:none; cursor:crosshair;
   }
+  @media (max-aspect-ratio: 16/9) { canvas { width:100vw; height:auto; } }
+  @media (min-aspect-ratio: 16/9) { canvas { height:100vh; width:auto; } }
+  @media (max-width:600px) { canvas { box-shadow:none; } }
 </style>
 </head>
 <body>
@@ -26,52 +29,56 @@
 /* ————————————————— CFG ————————————————— */
 const CFG = {
   W: 960, H: 540, TILE: 36, PSIZE: 26,
-  RUN_ACC: 0.85, RUN_MAX: 4.2, FRIC_GROUND: 0.62, FRIC_AIR: 0.90,
-  GRAV: 0.7, MAX_FALL: 13, COYOTE: 7, BUFFER: 8, FLIP_KICK: 2.5,
-  DEATH_FRAMES: 27,
-  ENEMY_SPEED: 1.4, ENEMY_SPEED_V: 1.6, ENEMY_R: 13, ENEMY_HIT_R: 11,
+  RUN_ACC: 1.2, RUN_MAX: 5.5, FRIC_GROUND: 0.58, FRIC_AIR: 0.88,
+  GRAV: 0.9, MAX_FALL: 16, COYOTE: 6, BUFFER: 8, FLIP_KICK: 3.5,
+  DEATH_FRAMES: 24,
+  ENEMY_SPEED: 2.2, ENEMY_SPEED_V: 2.4, ENEMY_R: 13, ENEMY_HIT_R: 11,
   ENEMY_PATROL: 4, ENEMY_HP: 1,
+  SHOOTER_R: 15, SHOOTER_FIRE_CD: 40, SHOOTER_BSPEED: 5.5,
   STAR_R: 22,
-  PLAT_RANGE: 3 * 36, PLAT_SPEED_H: 1.35, PLAT_SPEED_V: 1.15,
-  CRUMBLE_WARN: 26, CRUMBLE_GONE: 80, TRIP_COOLDOWN: 22,
+  PLAT_RANGE: 3 * 36, PLAT_SPEED_H: 1.8, PLAT_SPEED_V: 1.6,
+  CRUMBLE_WARN: 22, CRUMBLE_GONE: 70, TRIP_COOLDOWN: 20,
   // قتال
-  BULLET_SPEED: 9.5, BULLET_LIFE: 80, BULLET_R: 4, FIRE_CD: 11,
-  AMMO_BUFFER: 3, RECOIL: 0.8,
+  BULLET_SPEED: 12, BULLET_LIFE: 70, BULLET_R: 4, FIRE_CD: 8,
+  RECOIL: 1.0,
+  HEAT_MAX: 100, HEAT_PER_SHOT: 12, HEAT_DECAY: 0.5, HEAT_COOLDOWN: 45,
+  POWERUP_DROP: 0.35, POWERUP_LIFE: 500,
+  SHIELD_DUR: 480, RAPID_DUR: 300, RAPID_CD: 3,
+  DASH_SPD: 22, DASH_DUR: 7, DASH_CD: 90,
   // زعيم 1 (الحارس)
-  BOSS_R: 32, BOSS_HP: 16, BOSS_SPEED: 1.6, BOSS_ATK_PERIOD: 150,
-  BOSS_WINDUP: 40, EBULLET_SPEED: 3.4, EBULLET_LIFE: 200, EBULLET_R: 6,
-  BOSS_AMMO_BUFFER: 8,   // طلقات إضافية فوق صحة الزعيم (هامش للأخطاء)
+  BOSS_R: 32, BOSS_HP: 18,   BOSS_SPEED: 2.2, BOSS_ATK_PERIOD: 110,
+  BOSS_WINDUP: 30, EBULLET_SPEED: 4.5, EBULLET_LIFE: 180, EBULLET_R: 6,
   // زعيم 2 (الطاغية) — مختلف تماماً
-  TYRANT_R: 40, TYRANT_HP: 22, TYRANT_TRACK: 1.9, TYRANT_ATK_PERIOD: 120,
-  TYRANT_WINDUP: 34, TTBULLET_SPEED: 3.9,
+  TYRANT_R: 40, TYRANT_HP: 24, TYRANT_TRACK: 2.6, TYRANT_ATK_PERIOD: 85,
+  TYRANT_WINDUP: 26, TTBULLET_SPEED: 5.0,
 };
 
 /* ————————————————— I18N: كل النصوص بلغتين ————————————————— */
 const I18N = {
   ar: {
     title:'انقلاب', tagline:'اقلب الجاذبية. صوّب بالماوس. صفّي الأعداء واخرج.',
-    hintCombat:'A D / أسهم — حركة · مسافة — قلب · ماوس — تصويب · زر الماوس — إطلاق',
+    hintCombat:'A D / أسهم — حركة · مسافة — قلب · Shift — اندفاع · ماوس — تصويب · نقر — إطلاق',
     hintKeys:'R — إعادة · M — صوت · Esc — إعدادات',
     press:'اضغط أي زر', settings:'الإعدادات', music:'الموسيقى', sfx:'المؤثرات',
     language:'اللغة', back:'رجوع', resume:'استكمال', restart:'إعادة المرحلة',
     toMenu:'القائمة', deaths:'الموتات', level:'المرحلة', enemies:'الأعداء',
     ammo:'الطلقات', time:'الوقت', done:'تمام.', win:'خلصت.', fromStart:'R — من الأول',
     clearAll:'صفِّ الأعداء لفتح المخرج', exitOpen:'المخرج مفتوح — للنجمة!',
-    reload:'استُنفدت الذخيرة — مُت للتعبئة', boss:'الزعيم', pickLang:'اختر اللغة',
-    paused:'إيقاف مؤقت', muted:'صامت', ammoOut:'لا ذخيرة',
+    reload:'ارتفاع الحرارة — انتظر حتى يبرد', boss:'الزعيم', pickLang:'اختر اللغة',
+    paused:'إيقاف مؤقت', muted:'صامت',
     lv:['الخطوة','الشوك','الأسلاك','الرماية','الحارس','الأرض الهشّة','المصاعد','الجدران','المِحنة','الطاغية'],
   },
   en: {
     title:'FLIP', tagline:'Flip gravity. Aim with mouse. Clear enemies, then exit.',
-    hintCombat:'A D / Arrows — move · Space — flip · Mouse — aim · Click — shoot',
+    hintCombat:'A D / Arrows — move · Space — flip · Shift — dash · Mouse — aim · Click — shoot',
     hintKeys:'R — restart · M — sound · Esc — settings',
     press:'press any key', settings:'Settings', music:'Music', sfx:'SFX',
     language:'Language', back:'Back', resume:'Resume', restart:'Restart level',
     toMenu:'Menu', deaths:'Deaths', level:'Level', enemies:'Enemies',
     ammo:'Ammo', time:'Time', done:'Nice.', win:'Complete.', fromStart:'R — restart all',
     clearAll:'Clear enemies to open the exit', exitOpen:'Exit open — reach the star!',
-    reload:'Out of ammo — die to reload', boss:'BOSS', pickLang:'Choose language',
-    paused:'Paused', muted:'muted', ammoOut:'no ammo',
+    reload:'Overheated — wait to cool down', boss:'BOSS', pickLang:'Choose language',
+    paused:'Paused', muted:'muted',
     lv:['Step','Spikes','Wires','Gunplay','Warden','Brittle','Lifts','Walls','Trial','Tyrant'],
   },
 };
@@ -82,7 +89,7 @@ const isRTL = () => LANG === 'ar';
 /* ————————————————— Snd: صوت مولّد + مستويات مستقلة ————————————————— */
 const Snd = {
   ctx:null, master:null, sfxBus:null, musBus:null, muted:false, started:false,
-  musicVol:0.10, sfxVol:0.28, _chordStep:0, _nextChordT:0,
+  musicVol:0.18, sfxVol:0.30, _chordStep:0, _nextChordT:0,
   init() {
     if (this.started) return;
     const AC = window.AudioContext || window.webkitAudioContext;
@@ -97,11 +104,12 @@ const Snd = {
   setMusic(v){ this.musicVol = Math.max(0, Math.min(1, v)); if (this.musBus) this.musBus.gain.setTargetAtTime(this.musicVol, this.ctx.currentTime, 0.02); saveSettings(); },
   setSfx(v){ this.sfxVol = Math.max(0, Math.min(1, v)); if (this.sfxBus) this.sfxBus.gain.setTargetAtTime(this.sfxVol, this.ctx.currentTime, 0.02); saveSettings(); },
   toggleMute(){ this.muted = !this.muted; if (this.master) this.master.gain.setTargetAtTime(this.muted?0:1, this.ctx.currentTime, 0.02); },
-  _tone(f0,f1,dur,type,vol,when=0,bus=null){
+  _tone(f0,f1,dur,type,vol,when=0,bus=null,vary=0){
     if (!this.started) return;
     const t = this.ctx.currentTime + when, o = this.ctx.createOscillator(), g = this.ctx.createGain();
-    o.type = type; o.frequency.setValueAtTime(f0, t);
-    if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(f1,1), t+dur);
+    const pitch = vary ? f0 * (0.85 + Math.random() * 0.3) : f0;
+    o.type = type; o.frequency.setValueAtTime(pitch, t);
+    if (f1 !== f0) o.frequency.exponentialRampToValueAtTime(Math.max(vary?f1*(0.85+Math.random()*0.3):f1,1), t+dur);
     g.gain.setValueAtTime(0.0001, t);
     g.gain.exponentialRampToValueAtTime(vol, t+0.01);
     g.gain.exponentialRampToValueAtTime(0.0001, t+dur);
@@ -114,51 +122,116 @@ const Snd = {
   land(){ this._tone(150,90,0.05,'triangle',0.35); },
   crumble(){ this._tone(120,60,0.18,'square',0.25); },
   trip(){ this._tone(700,480,0.1,'triangle',0.5); },
-  shoot(){ this._tone(760,300,0.07,'square',0.35); },
+  shoot(){ this._tone(860,200,0.06,'square',0.4,0,0,true); this._tone(440,180,0.04,'triangle',0.25,0,0,true); },
   dry(){ this._tone(180,150,0.05,'square',0.25); },
-  hit(){ this._tone(500,180,0.08,'square',0.4); },
-  enemyDie(){ this._tone(320,90,0.14,'triangle',0.5); },
-  bossHit(){ this._tone(240,120,0.09,'square',0.5); },
+  hit(){ this._tone(500,180,0.08,'square',0.4,0,0,true); },
+  enemyDie(){ this._tone(320,90,0.14,'triangle',0.5,0,0,true); },
+  bossHit(){ this._tone(240,120,0.09,'square',0.5,0,0,true); },
   gateOpen(){ [392,523,659].forEach((f,i)=>this._tone(f,f,0.13,'sine',0.6,i*0.08)); },
-  CHORDS:[[110,164.81,220,261.63],[87.31,130.81,174.61,220],[130.81,196,261.63,329.63],[98,146.83,196,246.94]],
-  PENTA:[440,523.25,587.33,659.25,783.99], CHORD_DUR:4,
+  dash(){ this._tone(800,400,0.1,'sine',0.5,0,0,true); },
+  // موسيقى DOOM-style: BPM عالي · square bass · noise درامز · saw melodies
+  _musicTheme:0, _musicBoss:false,
+  MUSIC: {
+    calm:{ // E minor — داكن لكن بسيط
+      prog:[ [82.41,110,146.83,185], [73.42,98,130.81,164.81], [65.41,87.31,110,146.83], [73.42,98,130.81,164.81] ],
+      riffs:[ 220,261.63,293.66,329.63,392 ], bpm:150, vol:0.16 },
+    tense:{ // D harmonic minor — عدواني
+      prog:[ [73.42,98,130.81,164.81], [65.41,87.31,110,146.83], [82.41,110,146.83,185], [55,73.42,98,110] ],
+      riffs:[ 196,220,261.63,293.66,349.23 ], bpm:170, vol:0.18 },
+    boss:{ // F# diminished — هستيري
+      prog:[ [92.5,116.54,138.59,185], [77.78,98,116.54,155.56], [65.41,82.41,98,130.81], [103.83,130.81,155.56,207.65] ],
+      riffs:[ 261.63,293.66,349.23,392,466.16 ], bpm:195, vol:0.22 },
+  },
+  CHORD_DUR:4, _chordStep:0, _nextChordT:0,
+  setTheme(th,boss){
+    if(this._musicTheme===th&&this._musicBoss===boss) return;
+    this._musicTheme=th; this._musicBoss=boss;
+    this._chordStep=0; this._nextChordT=this.ctx.currentTime+0.05;
+  },
   _startMusic(){
     this._nextChordT = this.ctx.currentTime + 0.15;
+    this._musicTheme = 0; this._musicBoss = false;
     setInterval(()=>{ if(!this.started) return;
-      while (this._nextChordT < this.ctx.currentTime + 1.2){
-        this._playChord(this._chordStep % this.CHORDS.length, this._nextChordT, this._chordStep);
+      while (this._nextChordT < this.ctx.currentTime + 1.4){
+        const m = this._musicBoss ? this.MUSIC.boss : (this._musicTheme===1 ? this.MUSIC.tense : this.MUSIC.calm);
+        this._playMeasure(m, this._chordStep);
         this._nextChordT += this.CHORD_DUR; this._chordStep++;
       }
-    }, 300);
+    }, 150);
   },
-  _playChord(idx,t,step){
-    const D = this.CHORD_DUR;
-    this.CHORDS[idx].forEach((f,i)=>this._padNote(f,t,D+1.4,0.14-i*0.02,'sine'));
-    this._padNote(this.CHORDS[idx][0]/2, t, D+1.6, 0.07, 'triangle');
-    const n1 = this.PENTA[(step*3+1)%5], n2 = this.PENTA[(step*2+3)%5];
-    this._melNote(n1, t+0.6); if (step%2===0) this._melNote(n2, t+2.4);
+  _playMeasure(m, step){
+    const D = this.CHORD_DUR, t=this._nextChordT, vol=m.vol;
+    const chord = m.prog[step % m.prog.length];
+    // Pad (أجواء خلفية)
+    chord.forEach((f,i)=>this._pad(f,t,D+1.0,vol*0.5-i*0.03,'sine'));
+    // Bass line — square wave aggressive
+    this._bass(chord[0]/2, t, D, vol*0.7);
+    // Guitar riff — melody منفردة
+    const r = m.riffs;
+    this._riff(r[(step*3)%5], t+0.1, vol*0.6);
+    if(step%2===0) this._riff(r[(step*2+1)%5], t+1.8, vol*0.5);
+    if(step%3===0) this._riff(r[(step*4)%5], t+2.9,  vol*0.45);
+    // Drums — kick + snare + hihat
+    this._kick(t, vol*0.6);
+    this._snare(t+1.75, vol*0.5);
+    this._kick(t+2.1, vol*0.5);
+    this._hh(t+0.5, vol*0.3); this._hh(t+1.2, vol*0.25);
+    this._hh(t+2.5, vol*0.3); this._hh(t+3.2, vol*0.25);
+    // Double-kick fills
+    if(step%2===1){ this._kick(t+0.9, vol*0.4); this._kick(t+1.2, vol*0.3); }
+    if(step%3===2){ this._snare(t+0.9, vol*0.35); }
   },
-  _padNote(f,t,dur,vol,type){
+  _bass(f,t,dur,vol){
+    const o=this.ctx.createOscillator(), g=this.ctx.createGain(); o.type='square'; o.frequency.value=f;
+    g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+0.02);
+    g.gain.setValueAtTime(vol,t+dur-0.2); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    o.connect(g); g.connect(this.musBus); o.start(t); o.stop(t+dur+0.05);
+  },
+  _riff(f,t,vol){
+    const o=this.ctx.createOscillator(), g=this.ctx.createGain(); o.type='sawtooth'; o.frequency.value=f;
+    g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001,t+1.2); o.connect(g); g.connect(this.musBus); o.start(t); o.stop(t+1.3);
+  },
+  _pad(f,t,dur,vol,type){
     const o=this.ctx.createOscillator(), g=this.ctx.createGain(); o.type=type; o.frequency.value=f;
-    g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(vol,t+1.1);
-    g.gain.setValueAtTime(vol,t+dur-1.6); g.gain.exponentialRampToValueAtTime(0.0001,t+dur);
+    g.gain.setValueAtTime(0.0001,t); g.gain.linearRampToValueAtTime(vol,t+0.6);
+    g.gain.setValueAtTime(vol,t+dur-0.8); g.gain.linearRampToValueAtTime(0.0001,t+dur);
     o.connect(g); g.connect(this.musBus); o.start(t); o.stop(t+dur+0.1);
   },
-  _melNote(f,t){
-    const o=this.ctx.createOscillator(), g=this.ctx.createGain(); o.type='triangle'; o.frequency.value=f;
-    g.gain.setValueAtTime(0.0001,t); g.gain.exponentialRampToValueAtTime(0.05,t+0.06);
-    g.gain.exponentialRampToValueAtTime(0.0001,t+1.9); o.connect(g); g.connect(this.musBus); o.start(t); o.stop(t+2);
+  _kick(t,vol){
+    const o=this.ctx.createOscillator(), g=this.ctx.createGain(); o.type='sine'; o.frequency.setValueAtTime(200,t);
+    o.frequency.exponentialRampToValueAtTime(40,t+0.08);
+    g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.0001,t+0.1);
+    o.connect(g); g.connect(this.musBus); o.start(t); o.stop(t+0.12);
+  },
+  _snare(t,vol){
+    const buf=this.ctx.createBuffer(1,Math.ceil(this.ctx.sampleRate*0.08),this.ctx.sampleRate);
+    const d=buf.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*(1-i/d.length);
+    const s=this.ctx.createBufferSource(); s.buffer=buf; const g=this.ctx.createGain();
+    g.gain.setValueAtTime(vol*0.6,t); g.gain.exponentialRampToValueAtTime(0.0001,t+0.07);
+    s.connect(g); g.connect(this.musBus); s.start(t); s.stop(t+0.09);
+    // tone layer
+    const o=this.ctx.createOscillator(), g2=this.ctx.createGain(); o.type='triangle'; o.frequency.value=180;
+    g2.gain.setValueAtTime(vol*0.3,t); g2.gain.exponentialRampToValueAtTime(0.0001,t+0.05);
+    o.connect(g2); g2.connect(this.musBus); o.start(t); o.stop(t+0.07);
+  },
+  _hh(t,vol){
+    const buf=this.ctx.createBuffer(1,Math.ceil(this.ctx.sampleRate*0.025),this.ctx.sampleRate);
+    const d=buf.getChannelData(0); for(let i=0;i<d.length;i++) d[i]=(Math.random()*2-1)*(1-i/d.length*0.9);
+    const s=this.ctx.createBufferSource(); s.buffer=buf; const g=this.ctx.createGain();
+    g.gain.setValueAtTime(vol,t); g.gain.exponentialRampToValueAtTime(0.0001,t+0.03);
+    s.connect(g); g.connect(this.musBus); s.start(t); s.stop(t+0.04);
   },
 };
 
 /* حفظ/تحميل الإعدادات */
 function saveSettings(){
-  try { localStorage.setItem('flip_cfg', JSON.stringify({ lang:LANG, mus:Snd.musicVol, sfx:Snd.sfxVol })); } catch(e){}
+  try { localStorage.setItem('flip_cfg', JSON.stringify({ lang:LANG, mus:Snd.musicVol, sfx:Snd.sfxVol, bestTimes:G.bestTimes||[] })); } catch(e){}
 }
 function loadSettings(){
   try {
     const s = JSON.parse(localStorage.getItem('flip_cfg'));
-    if (s){ if (s.lang) LANG = s.lang; if (typeof s.mus==='number') Snd.musicVol = s.mus; if (typeof s.sfx==='number') Snd.sfxVol = s.sfx; return true; }
+    if (s){ if (s.lang) LANG = s.lang; if (typeof s.mus==='number') Snd.musicVol = s.mus; if (typeof s.sfx==='number') Snd.sfxVol = s.sfx; G.bestTimes = s.bestTimes||[]; return true; }
   } catch(e){}
   return false;
 }
@@ -167,175 +240,184 @@ function loadSettings(){
    name:{ar,en} · theme:0|1 · grid[] · boss?:true
    حروف: # . P * C ^ v < > o I H V x T B(زعيم)  — تُولَّد بالكود (genlevels) */
 const LEVELS = [
+  // Lv 0: Step — تعليم الحركة وقلب الجاذبية + مقدمة للأسلاك
   { name:{ar:"الخطوة",en:"Step"}, theme:0, boss:false, grid:[
     "##################################################",
+    "#...........T....................................#",
+    "#................................................#",
+    "#..............................................!.#",
+    "#................................................#",
+    "#..........^^^^^^................................#",
+    "#................................................#",
+    "#..................................I............#",
+    "#................................................#",
+    "#..............^^^^^^..............................#",
     "#................................................#",
     "#................................................#",
     "#................................................#",
-    "#................................................#",
-    "#................................................#",
-    "#................................................#",
-    "#................................................#",
-    "#................................................#",
-    "#................................................#",
-    "#................................................#",
-    "#................................................#",
-    "#................................................#",
-    "#.P....C..o...............o..C............o...*..#",
+    "#.P....C..o.........o..C............o...C..o..*..#",
     "################.....###########.....#############",
   ]},
+  // Lv 1: Spikes — شوك + تضاريس ضيقة مع أعداء متحركين
   { name:{ar:"الشوك",en:"Spikes"}, theme:0, boss:false, grid:[
     "################################################################",
-    "#.........................vvvvv................................#",
+    "#.........................vvvvv..................................#",
     "#..............................................................#",
+    "#.......vvvvv.........^^^^^^^^.......................vvvvv......#",
+    "#..........I...................!................................#",
+    "#........^^^....o...............o....^^^....................o..#",
     "#..............................................................#",
+    "#............................I..................................#",
+    "#.......vvvvv.................^^^^^^^..............vvvvv.......#",
     "#..............................................................#",
-    "#..............................................................#",
-    "#..............................................................#",
-    "#..............................................................#",
-    "#..............................................................#",
-    "#..............................................................#",
-    "#..............................................................#",
-    "#..............................................................#",
-    "#..............................................................#",
+    "#....................o...................................o......#",
+    "#........C....................................C.................#",
     "#.P....o..^^^^....C...o...........C.o...^^^^^.....C.o.......*..#",
     "################################################################",
   ]},
+  // Lv 2: Wires — أسلاك بشكل كثيف + منصات متحركة I
   { name:{ar:"الأسلاك",en:"Wires"}, theme:0, boss:false, grid:[
     "####################################################################",
-    "#...............T.............T.....vvvvv...T......................#",
-    "#...............T...I.........T.............T.......I..............#",
-    "#...............T.............T.............T......................#",
-    "#...............T.............T.............T......................#",
-    "#...............T.............T.............T......................#",
-    "#...............T.............T.............T......................#",
-    "#...............T.............T.............T......................#",
-    "#...............T.............T.............T......................#",
-    "#...............T.............T.............T......................#",
-    "#...............T.............T.............T......................#",
-    "#...............T.............T.............T......................#",
-    "#...............T.............T.............T......................#",
-    "#.P.......C.....T.....^^^^^...T...C.........T.....o.....C.....*....#",
+    "#................T.............T.....vvvvv...T..........T...........#",
+    "#................T...I.........T.............T.......I...T...........#",
+    "#................T.............T.............T..............T........#",
+    "#................T.............T.............T..............T........#",
+    "#................T....o........T.............T...o..........T........#",
+    "#................T.............T.............T..............T........#",
+    "#................T.............T.............T..............T........#",
+    "#................T.............T.............T..............T........#",
+    "#................T.............T.............T..............T........#",
+    "#................T.............T.............T..............T........#",
+    "#................T.............T.....o.......T..............T........#",
+    "#.....C..........T.............T.............T.......C......T........#",
+    "#.P.......C.....T.....^^^^^...T...C.........T.....o.....C.....*.....#",
     "####################################################################",
   ]},
+  // Lv 3: Gunplay — معارك بالرصاص + shooter أعداء + غرف ضيقة
   { name:{ar:"الرماية",en:"Gunplay"}, theme:0, boss:false, grid:[
     "################################################################",
+    "#.............I..............................................#",
     "#..............................................................#",
-    "#..............................................................#",
-    "#..............................................................#",
+    "#....o............##################........c...........c.....#",
     "#...............I...................I.................I........#",
-    "#..............................................................#",
-    "#..............................................................#",
-    "#........................o...................o.................#",
+    "#...............!..............................................#",
+    "#...........S.........................................S.......#",
+    "#.......................o...................o..................#",
     "#...................###########.........###########............#",
     "#..............................................................#",
-    "#..............................................................#",
-    "#..............................................................#",
+    "#....S............................................S..........#",
+    "#...............o..........................................o..#",
     "#..............................................................#",
     "#.P...C...o.............o.........C..........o.........o....*..#",
     "################################################################",
   ]},
+  // Lv 4: Warden — زعيم الحارس (نفس الساحة لكن أكبر)
   { name:{ar:"الحارس",en:"Warden"}, theme:0, boss:true, bossType:"warden", grid:[
-    "##########################",
-    "#........................#",
-    "#........................#",
-    "#........................#",
-    "#........................#",
-    "#........................#",
-    "#........................#",
-    "#............B...........#",
-    "#........................#",
-    "#...#####........#####...#",
-    "#........................#",
-    "#........................#",
-    "#........................#",
-    "#.P....................*.#",
-    "##########################",
+    "########################################",
+    "#......................................#",
+    "#......................................#",
+    "#......................................#",
+    "#......................................#",
+    "#......................................#",
+    "#......................................#",
+    "#..............B.......................#",
+    "#......................................#",
+    "#.....#####..............#####.........#",
+    "#......................................#",
+    "#......................................#",
+    "#......................................#",
+    "#.P..............................*.....#",
+    "########################################",
   ]},
+  // Lv 5: Brittle — أرض هشة مع شوك كثيف + أعداء
   { name:{ar:"الأرض الهشّة",en:"Brittle"}, theme:1, boss:false, grid:[
     "##############################################################",
     "#.........vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv........#",
     "#............................................................#",
+    "#.............v....................v................v........#",
+    "#.............v....................v.....o..........v........#",
+    "#.............v....................v................v........#",
+    "#.............v........o...........v................v........#",
+    "#.............v....................v................v........#",
+    "#.............v..........C.........v........C.......v........#",
+    "#.............v....................v................v........#",
+    "#.........x......x...........x..........x....................#",
     "#............................................................#",
-    "#............................................................#",
-    "#............................................................#",
-    "#............................................................#",
-    "#............................................................#",
-    "#............................................................#",
-    "#............................................................#",
-    "#............................................................#",
-    "#............................................................#",
-    "#............................................................#",
-    "#.P.....o..........Co..........C.o.........C.o...........*...#",
-    "##########xxxxxxxx####xxxxxxxx####xxxxxxxx####xxxxxxx#########",
+    "#...........C................................................#",
+    "#.P.....o..........C..o...o...C..........C.o.............o.*.#",
+    "##########xxxxxxxx####xxxxxxxx#####xxxxxxxx####xxxxxxxx#######",
   ]},
-  { name:{ar:"المصاعد",en:"Lifts"}, theme:1, boss:false, grid:[
+  // Lv 6: Abyss — مرحلة عمودية بقلب جاذبية متكرر
+  { name:{ar:"الهاوية",en:"Abyss"}, theme:1, boss:false, grid:[
     "############################################################",
-    "#.........vvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvvv...............#",
+    "#..............................*...........................#",
     "#..........................................................#",
     "#..........................................................#",
     "#..........................................................#",
-    "#..........................................................#",
-    "#.................I...............I........................#",
-    "#..........................................................#",
+    "#..........T...............................T...............#",
     "#..........................................................#",
     "#..........................................................#",
+    "#..c...................................c...................#",
+    "#..x.....x..........C......x.........x.......x........x.#",
     "#..........................................................#",
+    "#..........T...............................T...............#",
     "#..........................................................#",
-    "#..........................................................#",
-    "#.P.....C...........o..C...........o..C.............*......#",
-    "##########H...###########H...###########H...################",
+    "#.P....................................C.................#",
+    "##########......................................###########",
   ]},
+  // Lv 7: Walls — جدران + أسلاك عمودية + شوك جانبي + Shooter
   { name:{ar:"الجدران",en:"Walls"}, theme:1, boss:false, grid:[
     "####################################################################",
     "#......................>vvv<.......................>vvv<...........#",
     "#..................................................................#",
+    "#.............>^^^<.......S...c.......>^^^<...................o......#",
+    "#..................................................................#",
+    "#..........................................o.....................#",
+    "#..................................................................#",
+    "#..........................S........................................#",
     "#..................................................................#",
     "#..................................................................#",
+    "#.............o.......................................o..............#",
     "#..................................................................#",
-    "#..................................................................#",
-    "#...............................o...........................o......#",
-    "#..................................................................#",
-    "#..................................................................#",
-    "#..................................................................#",
-    "#..................................................................#",
-    "#..................................................................#",
+    "#.................C..................................C.............#",
     "#.P...C..>^^^<....o.............C....>^^^<....C...............*....#",
     "####################################################################",
   ]},
+  // Lv 8: Trial — مزيج كلشي: أسلاك، شوك، أعداء، منصات، مسدسات
   { name:{ar:"المِحنة",en:"Trial"}, theme:1, boss:false, grid:[
     "####################################################################################################",
     "#...................T...........T......vvvvvv.....vvvvvvvv......vvvv...............................#",
     "#...................T...........T..................................................................#",
-    "#...................T...........T..................................................................#",
+    "#...................T...........T..............S....................................o..............#",
     "#...................T...........T.............................I....................................#",
     "#...................T...........T..................................................................#",
+    "#...................T...........T.....o...................o......................................#",
+    "#...................T...........T...S...................................................o..........#",
     "#...................T...........T..................................................................#",
-    "#...................T...........T...o...................................................o..........#",
+    "#...................T...........T..........................................S.......................#",
+    "#...................T...........T..............................................o...................#",
     "#...................T...........T..................................................................#",
-    "#...................T...........T..................................................................#",
-    "#...................T...........T..................................................................#",
-    "#...................T...........T..................................................................#",
-    "#...................T...........T..................................................................#",
-    "#.P...C...^^^...o...T.C..^^^^...T...C.........C.o...........C.........C.^^^^....o...C.........C..*.#",
-    "########################################H...######xxxxxxxx##########################################",
+    "#.........C.........T...........T...............C................C...............C.............#",
+    "#.P...C...^^^...o...T.C..^^^^...T.C.........o.........C.o.........C.^^^^....o....C.........C..*.#",
+    "########################################H...######xxxxxxxx#########xxxxxxxx#######################",
   ]},
+  // Lv 9: Tyrant — ساحة أوسع لزعيم الطاغية
   { name:{ar:"الطاغية",en:"Tyrant"}, theme:1, boss:true, bossType:"tyrant", grid:[
-    "##############################",
-    "#............................#",
-    "#............................#",
-    "#............................#",
-    "#............................#",
-    "#...........######...........#",
-    "#............................#",
-    "#..............B.............#",
-    "#............................#",
-    "#...#####............#####...#",
-    "#............................#",
-    "#............................#",
-    "#............................#",
-    "#.P........................*.#",
-    "##############################",
+    "########################################",
+    "#......................................#",
+    "#......................................#",
+    "#......................................#",
+    "#......................................#",
+    "#..........#######.......#######......#",
+    "#......................................#",
+    "#...............B......................#",
+    "#......................................#",
+    "#......#####...............#####......#",
+    "#......................................#",
+    "#......................................#",
+    "#......................................#",
+    "#.P..............................*.....#",
+    "########################################",
   ]},
 ];
 
@@ -344,13 +426,19 @@ const G = {
   state:'boot',    // boot|langselect|menu|settings|play|paused|dead|levelend|won
   settingsReturn:'menu',
   lvl:0, deaths:0, time:0, tick:0,
-  gravDir:1, gravBlend:0, camX:0, shake:0, stateT:0, flashT:0, msgT:0,
-  ammo:0, gateOpen:false,
+  gravDir:1, gravBlend:0, camX:0, shake:0, hitstop:0, stateT:0, flashT:0, msgT:0, dmgFlash:0,
+  gateOpen:false,
   player:{ x:0,y:0, vx:0,vy:0, grounded:false, coyote:0, buffer:0, airT:0,
-           rotT:1, rotFrom:0, squash:0, facing:1, ride:null, flipCD:0, fireCD:0, aim:0, idleBob:0 },
+           rotT:1, rotFrom:0, squash:0, facing:1, ride:null, flipCD:0, fireCD:0, aim:0, idleBob:0,
+           shield:0, rapid:0, dash:0, dashCD:0, canDash:true,
+           heat:0, overheated:false, overheatCD:0,   killStreak:0, totalKills:0 },
   level:null, checkpoint:null,
-  bullets:[], ebullets:[], particles:[], boss:null,
+  bullets:[], ebullets:[], particles:[], powerups:[], boss:null,
   killed:null,     // Set لأعداء ماتوا (يفضلوا موتى عبر الإعادات)
+  bestTimes:[],    // best times per level
+  trails:[], rings:[],  // مسارات + حلقات صدمة
+  transition:{ alpha:0, dir:0, cb:null }, // fade transitions
+  storyIdx:0,
   debug:{ noEnemies:false, autoGate:false, autoAim:false },
 };
 
@@ -360,7 +448,7 @@ function parseLevel(idx) {
   const rows = grid.length, cols = grid[0].length, T = CFG.TILE;
   const solid = [], spikes = [], enemies = [], checkpoints = [];
   const platforms = [], crumble = [], crumbleMap = {}, trips = [];
-  let star = null, spawn = { x:T*2, y:T*2 }, bossSpawn = null;
+  let star = null, spawn = { x:T*2, y:T*2 }, bossSpawn = null, secrets = [];
   const consumed = {};
   for (let r=0;r<rows;r++){ solid[r]=[];
     for (let c=0;c<cols;c++){
@@ -372,9 +460,12 @@ function parseLevel(idx) {
       if (ch==='<') spikes.push({r,c,type:'left'});
       if (ch==='C') checkpoints.push({r,c,active:false});
       if (ch==='*') star = { x:x+T/2, y:y+T/2 };
+      if (ch==='!') secrets.push({ x:x+T/2, y:y+T/2, found:false });
       if (ch==='P') spawn = { x:x+T/2-CFG.PSIZE/2, y:y+T-CFG.PSIZE };
       if (ch==='o') enemies.push(makeEnemy(grid,r,c,'h'));
       if (ch==='I') enemies.push(makeEnemy(grid,r,c,'v'));
+      if (ch==='S') enemies.push(makeEnemy(grid,r,c,'s'));
+      if (ch==='c') enemies.push(makeEnemy(grid,r,c,'c'));
       if (ch==='T') trips.push({r,c});
       if (ch==='B') bossSpawn = { x:x+T/2, y:y+T/2 };
       if (ch==='x'){ const o={r,c,state:'solid',timer:0}; crumble.push(o); crumbleMap[r+','+c]=o; }
@@ -388,13 +479,19 @@ function parseLevel(idx) {
   }
   enemies.forEach((e,i)=>e.id=i);
   return { rows, cols, solid, spikes, enemies, checkpoints, platforms, crumble, crumbleMap, trips,
-           star, spawn, bossSpawn, boss: !!lv.boss, bossType: lv.bossType||'warden', theme: lv.theme||0, w:cols*T, h:rows*T };
+           star, spawn, bossSpawn, secrets,
+           boss: !!lv.boss, bossType: lv.bossType||'warden', theme: lv.theme||0, w:cols*T, h:rows*T };
 }
 
 function makeEnemy(grid,r,c,axis){
   const T=CFG.TILE, R=CFG.ENEMY_R;
   const pass=(rr,cc)=> rr>=0&&rr<grid.length&&cc>=0&&cc<grid[0].length && grid[rr][cc]!=='#' && grid[rr][cc]!=='x';
-  const e={ axis, x:c*T+T/2, y:r*T+T/2, dir:1, phase:(r*7+c)%100, hp:CFG.ENEMY_HP, alive:true };
+  const isShooter = axis==='s';
+  const isCharger = axis==='c';
+  const hp = (isShooter||isCharger) ? 2 : CFG.ENEMY_HP;
+  const e={ axis, x:c*T+T/2, y:r*T+T/2, dir:1, phase:(r*7+c)%100, hp, alive:true, fireCD:isShooter?Math.floor(Math.random()*40):0,
+            chargeCD:isCharger?Math.floor(Math.random()*60)+30:0 };
+  if (isShooter||isCharger){ e.minX=e.x; e.maxX=e.x; e.minY=e.y; e.maxY=e.y; return e; }
   if (axis==='h'){ let cl=c,cr=c;
     for(let i=0;i<CFG.ENEMY_PATROL;i++){ if(pass(r,cl-1)) cl--; else break; }
     for(let i=0;i<CFG.ENEMY_PATROL;i++){ if(pass(r,cr+1)) cr++; else break; }
@@ -411,12 +508,14 @@ function loadLevel(idx){
   G.lvl = idx; G.level = parseLevel(idx); G.tick = 0;
   G.killed = new Set();
   G.checkpoint = { x:G.level.spawn.x, y:G.level.spawn.y, grav:1 };
-  G.gravDir = 1; G.bullets=[]; G.ebullets=[];
+  G.gravDir = 1; G.bullets=[]; G.ebullets=[]; G.trails=[]; G.rings=[];
   G.gateOpen = false;   // البوابة تبدأ مقفولة كل مرحلة (تصلح باگ انتقالها بين المراحل)
   setupBoss();
+  Snd.setTheme(G.level.theme||0, !!G.level.boss);
   respawn();
   G.camX = Math.max(0, Math.min(G.player.x - CFG.W/2, G.level.w - CFG.W));
   G.state='play'; G.flashT=90; G.msgT=0;
+  G.transition = { alpha:0, dir:1, cb:null };
 }
 
 function setupBoss(){
@@ -440,25 +539,21 @@ function liveEnemies(){
   if (!G.level) return 0;
   return G.level.enemies.filter(e=>!G.killed.has(e.id)).length;
 }
-function refillAmmo(){
-  // في مرحلة الزعيم: الذخيرة = صحة الزعيم + هامش للأخطاء
-  if (G.level && G.level.boss && G.boss) G.ammo = G.boss.maxHp + CFG.BOSS_AMMO_BUFFER;
-  else G.ammo = liveEnemies() + CFG.AMMO_BUFFER;
-}
 
 function respawn(){
   const p=G.player, L=G.level;
   p.x=G.checkpoint.x; p.y=G.checkpoint.y; p.vx=0; p.vy=0;
   G.gravDir=G.checkpoint.grav;
   p.grounded=true; p.coyote=0; p.buffer=0; p.airT=0; p.rotT=1; p.squash=0; p.ride=null; p.flipCD=0; p.fireCD=0; p.idleBob=0;
-  G.bullets=[]; G.ebullets=[];
+  G.bullets=[]; G.ebullets=[]; G.powerups=[];
+  p.shield=0; p.rapid=0; p.dash=0; p.dashCD=0; p.canDash=true;
+  p.heat=0; p.overheated=false; p.overheatCD=0;
   if (L){
     for (const cb of L.crumble){ cb.state='solid'; cb.timer=0; L.solid[cb.r][cb.c]=true; }
     // الأعداء الأحياء (اللي ماتقتلوش) يرجعوا لمكانهم
     for (const e of L.enemies){ e.alive = !G.killed.has(e.id); e.dir = 1; }
   }
   if (G.boss){ setupBoss(); }   // الزعيم يرجع كامل عند الموت
-  refillAmmo();
 }
 
 /* ————————————————— فيزياء وتصادم ————————————————— */
@@ -522,12 +617,26 @@ function doFlip(){
   p.grounded=false; p.coyote=0; p.buffer=0; p.ride=null;
   p.rotFrom=G.gravDir>0?Math.PI:0; p.rotT=0;
   Snd.flip(G.gravDir<0);
-  spawnBurst(p.x+CFG.PSIZE/2, p.y+CFG.PSIZE/2, 6, '#4de3ff', 2.5);
+  const cx=p.x+CFG.PSIZE/2, cy=p.y+CFG.PSIZE/2;
+  spawnBurst(cx, cy, 10, '#4de3ff', 3);
+  spawnRing(cx, cy, 10, 3, 40, 'rgba(77,227,255,0.5)', 2);
 }
 function killPlayer(){
   if(G.state!=='play') return;
-  G.state='dead'; G.stateT=0; G.deaths++; G.shake=14; Snd.death();
-  spawnBurst(G.player.x+CFG.PSIZE/2, G.player.y+CFG.PSIZE/2, 22, '#ff5566', 5);
+  if(G.player.shield>0){ G.player.shield=0;
+    Snd.trip(); spawnBurst(G.player.x+CFG.PSIZE/2, G.player.y+CFG.PSIZE/2, 22, '#7ac7ff', 5);
+    spawnRing(G.player.x+CFG.PSIZE/2, G.player.y+CFG.PSIZE/2, 15, 4, 50, '#7ac7ff', 3);
+    G.shake=6; G.flashT=15; G.dmgFlash=10; return; }
+  const cx = G.player.x+CFG.PSIZE/2, cy = G.player.y+CFG.PSIZE/2;
+  G.state='dead'; G.stateT=0; G.deaths++; G.shake=22; G.flashT=30; G.dmgFlash=20; Snd.death();
+  G.player.killStreak = 0;
+  spawnBurst(cx, cy, 40, '#ff4455', 7);
+  spawnRing(cx, cy, 25, 5, 80, '#ff4455', 4);
+  spawnRing(cx, cy, 18, 3, 50, '#ff8899', 3);
+  // دائرة صدمة كبيرة
+  for(let i=0;i<16;i++){ const a=i*0.393;
+    G.particles.push({x:cx,y:cy,
+      vx:Math.cos(a)*(3+Math.random()*5),vy:Math.sin(a)*(3+Math.random()*5),life:1,decay:0.015,col:'#ff8899',size:4+Math.random()*5}); }
 }
 
 /* ————————————————— قتال: إطلاق، طلقات، أعداء ————————————————— */
@@ -535,12 +644,14 @@ function tryShoot(){
   const p=G.player;
   if (G.state!=='play') return;
   if (p.fireCD>0) return;
-  if (G.ammo<=0){ Snd.dry(); G.msgT=90; return; }
+  if (p.overheated){ Snd.dry(); G.msgT=60; return; }
   const cx=p.x+CFG.PSIZE/2, cy=p.y+CFG.PSIZE/2;
   const a=p.aim;
   G.bullets.push({ x:cx+Math.cos(a)*16, y:cy+Math.sin(a)*16,
                    vx:Math.cos(a)*CFG.BULLET_SPEED, vy:Math.sin(a)*CFG.BULLET_SPEED, life:CFG.BULLET_LIFE });
-  G.ammo--; p.fireCD=CFG.FIRE_CD;
+  p.heat = Math.min(CFG.HEAT_MAX, p.heat + CFG.HEAT_PER_SHOT);
+  if (p.heat >= CFG.HEAT_MAX && !p.overheated){ p.overheated=true; p.overheatCD=CFG.HEAT_COOLDOWN; Snd.trip(); }
+  p.fireCD=p.rapid>0?CFG.RAPID_CD:CFG.FIRE_CD;
   // ارتداد بسيط عكس التصويب — يمكن استغلاله للدفع
   p.vx -= Math.cos(a)*CFG.RECOIL; p.vy -= Math.sin(a)*CFG.RECOIL*0.6;
   Snd.shoot();
@@ -551,16 +662,22 @@ function updateBullets(L){
   for (let i=G.bullets.length-1;i>=0;i--){
     const b=G.bullets[i]; b.x+=b.vx; b.y+=b.vy; b.life--;
     let dead = b.life<=0;
-    if(!dead){ const c=Math.floor(b.x/T), r=Math.floor(b.y/T); if(isSolid(L,r,c)){ dead=true; spawnBurst(b.x,b.y,3,'#9fb6d0',1.5); } }
+    if(!dead){ const c=Math.floor(b.x/T), r=Math.floor(b.y/T); if(isSolid(L,r,c)){ dead=true; spawnBurst(b.x,b.y,5,'#9fb6d0',2); } }
     if(!dead){
       for(const e of L.enemies){ if(!e.alive) continue;
+        const eR = e.axis==='s' ? CFG.SHOOTER_R : CFG.ENEMY_R;
         const dx=b.x-e.x, dy=b.y-e.y;
-        if(dx*dx+dy*dy < (CFG.ENEMY_R+CFG.BULLET_R)*(CFG.ENEMY_R+CFG.BULLET_R)){
-          e.hp--; dead=true;
-          if(e.hp<=0){ e.alive=false; G.killed.add(e.id); Snd.enemyDie();
-            spawnBurst(e.x,e.y,16,e.axis==='v'?'#c774ff':'#ff9f43',4);
+        if(dx*dx+dy*dy < (eR+CFG.BULLET_R)*(eR+CFG.BULLET_R)){
+          e.hp--; dead=true; G.hitstop=3;
+          if(e.hp<=0){ G.hitstop=5; e.alive=false; G.killed.add(e.id); Snd.enemyDie();
+            const col=e.axis==='v'?'#c774ff':(e.axis==='s'?'#ff77dd':(e.axis==='c'?'#ff6644':'#ff9f43'));
+            spawnBurst(e.x,e.y,20,col,5);
+            spawnRing(e.x,e.y,18,6,60,col,3);
+            G.player.killStreak++; G.player.totalKills++;
+            if((e.axis==='s'||e.axis==='c') && Math.random()<CFG.POWERUP_DROP) spawnPowerup(e.x,e.y);
+            if(!(e.axis==='s'||e.axis==='c') && Math.random()<CFG.POWERUP_DROP*0.6) spawnPowerup(e.x,e.y);
             if(liveEnemies()===0 && !G.gateOpen && !L.boss){ G.gateOpen=true; G.msgT=120; Snd.gateOpen(); }
-          } else { Snd.hit(); spawnBurst(b.x,b.y,4,'#ffd0d0',2); }
+          } else { Snd.hit(); spawnBurst(b.x,b.y,6,'#ffd0d0',2.5,{col2:'#ffe08a'}); spawnRing(b.x,b.y,6,3,20,'rgba(255,200,200,0.5)',2); }
           break;
         }
       }
@@ -568,9 +685,10 @@ function updateBullets(L){
     if(!dead && G.boss && G.boss.alive){
       const bo=G.boss, dx=b.x-bo.x, dy=b.y-bo.y;
       if(dx*dx+dy*dy < (bo.r+CFG.BULLET_R)*(bo.r+CFG.BULLET_R)){
-        bo.hp--; bo.hitFlash=6; dead=true; Snd.bossHit();
-        spawnBurst(b.x,b.y,6,'#ffd0d0',2.5);
-        if(bo.hp<=0){ bo.alive=false; bossDefeated(); }
+        bo.hp--; bo.hitFlash=6; dead=true; G.hitstop=6; Snd.bossHit();
+        spawnBurst(b.x,b.y,10,'#ffd0d0',3,{col2:'#ffe08a'});
+        spawnRing(b.x,b.y,8,4,25,'rgba(255,200,200,0.5)',2);
+        if(bo.hp<=0){ G.hitstop=12; bo.alive=false; bossDefeated(); }
         else if(bo.hp<=bo.maxHp/2) bo.phase=2;
       }
     }
@@ -580,7 +698,23 @@ function updateBullets(L){
 function updateEnemies(L,px0,px1,py0,py1){
   for(const e of L.enemies){ if(!e.alive) continue;
     if(e.axis==='h'){ e.x+=CFG.ENEMY_SPEED*e.dir; if(e.x<e.minX){e.x=e.minX;e.dir=1;} if(e.x>e.maxX){e.x=e.maxX;e.dir=-1;} }
-    else { e.y+=CFG.ENEMY_SPEED_V*e.dir; if(e.y<e.minY){e.y=e.minY;e.dir=1;} if(e.y>e.maxY){e.y=e.maxY;e.dir=-1;} }
+    else if(e.axis==='v'){ e.y+=CFG.ENEMY_SPEED_V*e.dir; if(e.y<e.minY){e.y=e.minY;e.dir=1;} if(e.y>e.maxY){e.y=e.maxY;e.dir=-1;} }
+    else if(e.axis==='c'){
+      if(--e.chargeCD<=0 && !e._charging){
+        const dx=G.player.x+CFG.PSIZE/2-e.x, dy=G.player.y+CFG.PSIZE/2-e.y;
+        if(dx*dx+dy*dy < 320*320){ e._charging=true; e._cvx=Math.sign(dx)*CFG.ENEMY_SPEED*3; e._cvy=Math.sign(dy)*CFG.ENEMY_SPEED_V*3; e.chargeCD=120;
+          spawnBurst(e.x,e.y,6,'#ff6644',3); } }
+      if(e._charging){ e.x+=e._cvx; e.y+=e._cvy; e._chargeLife=(e._chargeLife||30)-1;
+        if(e._chargeLife<=0){ e._charging=false; e._chargeLife=0; } }
+      else { e.chargeCD=Math.max(1,e.chargeCD-1); }
+    } else if(e.axis==='s'){
+      if((--e.fireCD)<=0){
+        e.fireCD=CFG.SHOOTER_FIRE_CD;
+        const a=Math.atan2(G.player.y+CFG.PSIZE/2-e.y, G.player.x+CFG.PSIZE/2-e.x);
+        G.ebullets.push({x:e.x,y:e.y,vx:Math.cos(a)*CFG.SHOOTER_BSPEED,vy:Math.sin(a)*CFG.SHOOTER_BSPEED,life:CFG.EBULLET_LIFE,_purple:true});
+        Snd.hit();
+      }
+    }
     if(G.debug.noEnemies) continue;
     const cx=Math.max(px0,Math.min(e.x,px1)), cy=Math.max(py0,Math.min(e.y,py1));
     const dx=e.x-cx, dy=e.y-cy;
@@ -592,9 +726,12 @@ function updateEnemies(L,px0,px1,py0,py1){
 /* ————————————————— الزعيم ————————————————— */
 function bossDefeated(){
   const bo=G.boss;
-  spawnBurst(bo.x,bo.y,40,'#ffd94d',5);
+  const col = bo.type==='tyrant' ? '#c58bff' : '#ffd94d';
+  spawnBurst(bo.x,bo.y,50,col,6);
+  spawnRing(bo.x,bo.y,30,10,120,col,6);
+  spawnRing(bo.x,bo.y,20,5,80,'#ffffff',4);
   G.gateOpen=true;
-  G.state='levelend'; G.stateT=0; Snd.winLevel(); G.shake=18;
+  G.state='levelend'; G.stateT=0; Snd.winLevel(); G.shake=24;
 }
 function updateBoss(L,p){
   const bo=G.boss; if(!bo||!bo.alive) return;
@@ -619,6 +756,16 @@ function updateWarden(L,p,bo){
   bo.atkT++;
   const period = bo.phase===2 ? CFG.BOSS_ATK_PERIOD*0.6 : CFG.BOSS_ATK_PERIOD;
   if(bo.windup>0){ bo.windup--;
+    // Show attack target indicator
+    if(bo.windup === 15){
+      if(bo.pendingCharge){ /* visual cue: line to player */
+        const a=Math.atan2(p.y+CFG.PSIZE/2-bo.y, p.x+CFG.PSIZE/2-bo.x);
+        for(let i=0;i<6;i++) G.particles.push({x:bo.x+Math.cos(a)*(bo.r+10), y:bo.y+Math.sin(a)*(bo.r+10),
+          vx:0,vy:0,life:1,decay:0.04,col:'#ff5566',size:4});
+      } else { /* ring burst warning */
+        spawnRing(bo.x,bo.y,16,bo.r+5,bo.r+25,'rgba(255,85,102,0.3)',3);
+      }
+    }
     if(bo.windup===0){ const pcx=p.x+CFG.PSIZE/2, pcy=p.y+CFG.PSIZE/2;
       if(bo.pendingCharge){ const a=Math.atan2(pcy-bo.y, pcx-bo.x); bo.charge=26; bo.cvx=Math.cos(a)*6.5; bo.cvy=Math.sin(a)*6.5; bo.pendingCharge=false; }
       else { const n=bo.phase===2?12:8; for(let i=0;i<n;i++){ const a=i/n*Math.PI*2+(bo.atkT*0.1);
@@ -640,6 +787,19 @@ function updateTyrant(L,p,bo){
   bo.atkT++;
   const period = bo.phase===2 ? CFG.TYRANT_ATK_PERIOD*0.62 : CFG.TYRANT_ATK_PERIOD;
   if(bo.windup>0){ bo.windup--;
+    // Attack warning based on kind
+    if(bo.windup===15){
+      if(bo.atkKind===0){ /* aimed fan: lines toward player */
+        const a=Math.atan2(pcy-bo.y, pcx-bo.x);
+        for(let i=-2;i<=2;i++){ const aa=a+i*0.26;
+          for(let j=0;j<3;j++) G.particles.push({x:bo.x+Math.cos(aa)*(bo.r+8+j*8), y:bo.y+Math.sin(aa)*(bo.r+8+j*8),
+            vx:0,vy:0,life:1,decay:0.05,col:'#ff77dd',size:3}); }
+      } else if(bo.atkKind===1){ /* rain: highlight columns */
+        for(let i=0;i<4;i++) spawnBurst(T + i*(L.w-2*T)/4, bo.r, 3, '#c58bff', 2);
+      } else { /* gravity pulse */
+        spawnRing(bo.x,bo.y,18,bo.r+5,bo.r+30,'rgba(197,139,255,0.4)',4);
+      }
+    }
     if(bo.windup===0) tyrantFire(L,p,bo);
   } else if(bo.atkT>=period){ bo.atkT=0; bo.windup=CFG.TYRANT_WINDUP;
     // تسلسل الهجمات: طور1 [موجّهة، مطر] · طور2 يضيف [نبضة جاذبية]
@@ -710,14 +870,36 @@ function updatePlay(){
   p.grounded=(hitY!==0&&hitY===G.gravDir);
 
   if(p.grounded){ p.coyote=CFG.COYOTE;
-    if(!wasGrounded&&p.airT>6){ p.squash=1; Snd.land(); spawnBurst(p.x+S/2,p.y+(G.gravDir>0?S:0),4,'#8aa7c7',1.6); }
+    if(!wasGrounded&&p.airT>6){ p.squash=1; Snd.land(); spawnBurst(p.x+S/2,p.y+(G.gravDir>0?S:0),6,'#8aa7c7',2);
+      spawnRing(p.x+S/2,p.y+(G.gravDir>0?S:0),8,4,35,'rgba(138,167,199,0.4)',2); }
     p.airT=0; triggerCrumbleUnder(p,L);
   } else { if(p.coyote>0)p.coyote--; p.airT++; }
   updateCrumble(p,L);
+  if(p.grounded) p.canDash=true;
+  if(p.shield>0) p.shield--;
+  if(p.rapid>0) p.rapid--;
+  if(p.dashCD>0) p.dashCD--;
+  if(p.dash>0) p.dash--;
+  // Heat system
+  if(p.overheated){ p.overheatCD--; if(p.overheatCD<=0){ p.overheated=false; p.heat=0; } }
+  else if(p.heat>0 && p.fireCD>0) p.heat = Math.max(0, p.heat - CFG.HEAT_DECAY);
 
   if(KEYS.flipPressed){ KEYS.flipPressed=false;
     if(p.grounded||p.coyote>0) doFlip(); else p.buffer=CFG.BUFFER;
   } else if(p.buffer>0){ p.buffer--; if(p.grounded) doFlip(); }
+
+  // Dash هوائي (Shift)
+  if(KEYS.dashPressed){ KEYS.dashPressed=false;
+    if(!p.grounded && p.canDash && p.dashCD<=0 && p.dash<=0){
+      p.canDash=false; p.dash=CFG.DASH_DUR; p.dashCD=CFG.DASH_CD;
+      const dd = dir!==0 ? dir : p.facing;
+      p.vx = dd*CFG.DASH_SPD; p.vy = 0;
+      const cx=p.x+S/2, cy=p.y+S/2;
+      spawnBurst(cx, cy, 14, '#aae0ff', 6,{col2:'#ffffff'});
+      spawnRing(cx, cy, 12, 4, 50, 'rgba(170,224,255,0.4)', 3);
+      Snd.dash();
+    }
+  }
 
   // إطلاق (من الماوس أو الآلي)
   if(KEYS.firePressed){ KEYS.firePressed=false; tryShoot(); }
@@ -745,9 +927,17 @@ function updatePlay(){
 
   updateBullets(L);
   if(updateEnemies(L,px0,px1,py0,py1)) return;
-  if(G.boss){ updateBoss(L,p); if(G.state!=='play') return; updateEbullets(L,p); if(G.state!=='play') return; }
+  updateEbullets(L,p); if(G.state!=='play') return;
+  if(G.boss){ updateBoss(L,p); if(G.state!=='play') return; }
+  updatePowerups();
 
   // بوابة الخروج مفتوحة؟
+  // Secrets
+  for(const s of L.secrets){ if(s.found) continue;
+    const dx=(p.x+S/2)-s.x, dy=(p.y+S/2)-s.y;
+    if(dx*dx+dy*dy < 30*30){ s.found=true; Snd.checkpoint(); spawnBurst(s.x,s.y,16,'#ffd94d',4);
+      G.player.killStreak = Math.min(8, G.player.killStreak+2); G.flashT=15; } }
+
   if(G.debug.autoGate) G.gateOpen = true;
   else if(!G.level.boss) G.gateOpen = liveEnemies()===0;
 
@@ -760,7 +950,10 @@ function updatePlay(){
   // النجمة — فقط لو البوابة مفتوحة
   const st=L.star;
   if(st && G.gateOpen){ const dx=(p.x+S/2)-st.x, dy=(p.y+S/2)-st.y;
-    if(dx*dx+dy*dy < CFG.STAR_R*CFG.STAR_R*2.4){ G.state='levelend'; G.stateT=0; Snd.winLevel(); spawnBurst(st.x,st.y,26,'#ffd94d',4.5); } }
+    if(dx*dx+dy*dy < CFG.STAR_R*CFG.STAR_R*2.4){
+      // save best time
+      if(!G.bestTimes[G.lvl]||G.time<G.bestTimes[G.lvl]){ G.bestTimes[G.lvl]=G.time; saveSettings(); }
+      G.state='levelend'; G.stateT=0; Snd.winLevel(); spawnBurst(st.x,st.y,26,'#ffd94d',4.5); } }
 
   const target=Math.max(0,Math.min(p.x-CFG.W/2+S/2, L.w-CFG.W));
   G.camX += (target-G.camX)*0.15;
@@ -770,13 +963,23 @@ function update(){
   if(G.shake>0) G.shake-=1;
   if(G.flashT>0) G.flashT--;
   updateParticles();
+  updateTrailsAndRings();
+  // Screen transition
+  if(G.transition.dir===1){ G.transition.alpha = Math.min(1, G.transition.alpha + 0.05); if(G.transition.alpha>=1){ const cb=G.transition.cb; G.transition.dir=-1; if(cb) cb(); } }
+  else if(G.transition.dir===-1){ G.transition.alpha = Math.max(0, G.transition.alpha - 0.05); if(G.transition.alpha<=0) G.transition.dir=0; }
+  if(G.hitstop>0){ G.hitstop--; return; }
   switch(G.state){
     case 'play': updatePlay(); break;
-    case 'dead': G.stateT++; if(G.stateT>=CFG.DEATH_FRAMES){ respawn(); G.state='play'; } break;
-    case 'levelend': G.stateT++; if(G.stateT>=55){ if(G.lvl+1<LEVELS.length) loadLevel(G.lvl+1); else G.state='won'; } break;
+    case 'dead': G.stateT++; if(G.stateT>=20){ G.state='deathscreen'; G.stateT=0; } break;
+    case 'levelend': G.stateT++; if(G.stateT>=35){
+      const storyAfter = [2,5];
+      if(storyAfter.includes(G.lvl) && G.lvl+1<LEVELS.length){ G.state='story'; G.storyIdx=storyAfter.indexOf(G.lvl); G.stateT=0; }
+      else { G.state='levelcomplete'; G.stateT=0; }
+    } break;
+    case 'story': break;
   }
 }
-function startGame(){ G.deaths=0; G.time=0; loadLevel(0); }
+function startGame(){ G.deaths=0; G.time=0; G.player.totalKills=0; loadLevel(0); }
 
 /* ————————————————— تصويب: ماوس أو آلي ————————————————— */
 function updateAim(){
@@ -799,7 +1002,7 @@ function nearestLiveTarget(){
 }
 // ذكاء قتال للبوت: صوّب على الأقرب واطلق لو فيه خط رؤية
 function botCombat(){
-  const p=G.player; if(p.fireCD>0||G.ammo<=0) return;
+  const p=G.player; if(p.fireCD>0||p.overheated) return;
   const t=nearestLiveTarget(); if(!t) return;
   const cx=p.x+CFG.PSIZE/2, cy=p.y+CFG.PSIZE/2;
   if(!lineClear(cx,cy,t.x,t.y)) return;
@@ -813,19 +1016,67 @@ function lineClear(x0,y0,x1,y1){
   return true;
 }
 
+/* ————————————————— Trail + Ring نظام ————————————————— */
+function spawnRing(x,y,life,r0,r1,col,width){
+  G.rings.push({ x, y, life, maxLife:life, r:r0, rMax:r1, col, width });
+}
+function updateTrailsAndRings(){
+  const p = G.player, S = CFG.PSIZE;
+  // Dash trail ghosts
+  if (p.dash > 0) {
+    G.trails.push({ x:p.x, y:p.y, life:1 });
+  }
+  // Decay trails
+  for (let i = G.trails.length-1; i>=0; i--) {
+    G.trails[i].life -= 0.045;
+    if (G.trails[i].life <= 0) G.trails.splice(i,1);
+  }
+  // Decay rings
+  for (let i = G.rings.length-1; i>=0; i--) {
+    const r = G.rings[i]; r.life--;
+    const t = 1 - r.life / r.maxLife;
+    r.r = r.rMax * t;
+    if (r.life <= 0) G.rings.splice(i,1);
+  }
+}
+
 /* ————————————————— جسيمات ————————————————— */
-function spawnBurst(x,y,n,col,speed){
+function spawnBurst(x,y,n,col,speed,opts){
   for(let i=0;i<n;i++){ const a=Math.random()*Math.PI*2, v=(0.3+Math.random()*0.7)*speed;
-    G.particles.push({ x,y, vx:Math.cos(a)*v, vy:Math.sin(a)*v, life:1, decay:0.03+Math.random()*0.03,
-      col, size:2+Math.random()*3 }); }
+    G.particles.push({ x,y, vx:Math.cos(a)*v, vy:Math.sin(a)*v, life:1, decay:0.025+Math.random()*0.025,
+      col:opts&&opts.col2?((Math.random()<0.4)?opts.col2:col):col, size:(opts&&opts.size?opts.size:2)+Math.random()*3 }); }
 }
 function updateParticles(){
+  if(G.particles.length > 400) G.particles.splice(0, G.particles.length - 300);
   for(let i=G.particles.length-1;i>=0;i--){ const p=G.particles[i];
     p.x+=p.vx; p.y+=p.vy; p.vx*=0.96; p.vy*=0.96; p.life-=p.decay; if(p.life<=0) G.particles.splice(i,1); }
+}
+function spawnPowerup(x,y){
+  const type = Math.random()<0.5 ? 'shield' : 'rapid';
+  G.powerups.push({ x, y, type, life:CFG.POWERUP_LIFE, bob:Math.random()*6.28 });
+}
+function updatePowerups(){
+  const p=G.player, S=CFG.PSIZE, T=CFG.TILE, L=G.level;
+  for(let i=G.powerups.length-1;i>=0;i--){
+    const u=G.powerups[i]; u.bob+=0.06; u.life--;
+    // رسوم جاذبية بسيطة: يطفو في مكانه
+    if(u.life<=0||u.y>L.h+40){ G.powerups.splice(i,1); continue; }
+    // تصادم مع اللاعب
+    const dx=(p.x+S/2)-u.x, dy=(p.y+S/2)-u.y;
+    if(dx*dx+dy*dy < 24*24){
+      if(u.type==='shield'){ p.shield=CFG.SHIELD_DUR; spawnBurst(u.x,u.y,10,'#7ac7ff',3);
+        Snd.checkpoint(); }
+      else { p.rapid=CFG.RAPID_DUR; spawnBurst(u.x,u.y,10,'#ffd94d',3);
+        Snd.checkpoint(); }
+      G.powerups.splice(i,1);
+    }
+  }
 }
 
 /* ————————————————— الرسم ————————————————— */
 const cv=document.getElementById('game'), ctx=cv.getContext('2d');
+const dpr=Math.min(window.devicePixelRatio||1,2);
+if(dpr>1){ cv.width=CFG.W*dpr; cv.height=CFG.H*dpr; ctx.scale(dpr,dpr); }
 const THEMES=[
   { down:{top:[11,21,38],bot:[18,35,61]}, up:{top:[25,15,43],bot:[43,23,71]},
     tileA:[53,80,122], tileB:[74,58,120], edgeA:[93,138,184], edgeB:[130,104,190], player:'#4de3ff' },
@@ -858,6 +1109,20 @@ function render(){
   for(const s of STARS){ const sx=((s.x-G.camX*s.z)%2400+2400)%2400-720; if(sx<-10||sx>W+10) continue;
     ctx.globalAlpha=0.25+0.2*Math.sin(frameCount*0.03+s.x); ctx.fillStyle='#cfe4ff'; ctx.fillRect(sx,s.y,s.r,s.r); }
   ctx.restore();
+
+  // Parallax background — طبقة تضاريس خلفية
+  if(G.level){
+    ctx.save(); ctx.translate(-Math.round(G.camX*0.15),0);
+    const pCol = G.level.theme===0 ? 'rgba(20,30,50,0.35)' : 'rgba(40,15,25,0.35)';
+    const pHi = G.level.theme===0 ? 'rgba(20,35,65,0.15)' : 'rgba(55,18,30,0.15)';
+    ctx.fillStyle=pCol; ctx.beginPath(); ctx.moveTo(0,450);
+    for(let x=0;x<=1400;x+=40){ const y=450-Math.sin(x*0.008+1.2)*90-Math.sin(x*0.02)*30-Math.sin(x*0.005)*50; ctx.lineTo(x,Math.max(300,y)); }
+    ctx.lineTo(1400,540); ctx.lineTo(0,540); ctx.closePath(); ctx.fill();
+    ctx.fillStyle=pHi; ctx.beginPath(); ctx.moveTo(0,480);
+    for(let x=0;x<=1400;x+=40){ const y=480-Math.sin(x*0.01+2.1)*60-Math.sin(x*0.025)*20; ctx.lineTo(x,Math.max(350,y)); }
+    ctx.lineTo(1400,540); ctx.lineTo(0,540); ctx.closePath(); ctx.fill();
+    ctx.restore();
+  }
 
   if(!G.level || G.state==='menu'||G.state==='langselect'||G.state==='won'||(G.state==='settings'&&G.settingsReturn==='menu')){
     renderUI(); return;
@@ -907,19 +1172,87 @@ function render(){
 
   // أعداء أحياء
   for(const e of L.enemies){ if(!e.alive) continue;
-    const pr=CFG.ENEMY_R+Math.sin((frameCount+e.phase)*0.12)*1.5, vertical=e.axis==='v';
-    ctx.fillStyle=vertical?'#c774ff':'#ff9f43'; ctx.beginPath(); ctx.arc(e.x,e.y,pr,0,7); ctx.fill();
-    // عين تتابع اللاعب
+    const isShooter=e.axis==='s', vertical=e.axis==='v', isCharger=e.axis==='c';
+    const pr=isShooter||isCharger?CFG.SHOOTER_R:(CFG.ENEMY_R+Math.sin((frameCount+e.phase)*0.12)*1.5);
     const pcx=G.player.x+CFG.PSIZE/2, pcy=G.player.y+CFG.PSIZE/2;
-    const ea = Math.atan2(pcy-e.y, pcx-e.x);
-    const ed = Math.min(pr*0.35, 5);
-    const eox = Math.cos(ea)*ed, eoy = Math.sin(ea)*ed;
-    ctx.fillStyle=vertical?'#7a2fb0':'#b3541e';
-    ctx.beginPath(); ctx.arc(e.x+eox, e.y+eoy, pr*0.35, 0, 7); ctx.fill(); }
+    // وهج خلف العدو
+    ctx.globalAlpha=0.12+0.06*Math.sin(frameCount*0.08+e.phase);
+    const glowCol=isShooter?'#c58bff':(isCharger?'#ff6644':(vertical?'#c774ff':'#ff9f43'));
+    ctx.fillStyle=glowCol; ctx.beginPath(); ctx.arc(e.x,e.y,pr+8,0,7); ctx.fill(); ctx.globalAlpha=1;
+    if(isShooter){
+      const sa=Math.atan2(pcy-e.y, pcx-e.x);
+      ctx.save(); ctx.translate(e.x,e.y); ctx.rotate(sa);
+      ctx.fillStyle='#2a1040'; ctx.fillRect(8,-3,16,6); ctx.fillStyle='#c58bff'; ctx.fillRect(20,-3,4,6);
+      ctx.restore();
+      ctx.fillStyle='#6b2fa0'; ctx.save(); ctx.translate(e.x,e.y); ctx.rotate(frameCount*0.04+sa);
+      ctx.beginPath(); ctx.moveTo(pr,0); ctx.lineTo(0,-pr); ctx.lineTo(-pr,0); ctx.lineTo(0,pr); ctx.closePath(); ctx.fill();
+      ctx.restore();
+      // حواف مضيئة للمعين
+      ctx.strokeStyle='rgba(197,139,255,0.4)'; ctx.lineWidth=1.5; ctx.save(); ctx.translate(e.x,e.y); ctx.rotate(frameCount*0.05+sa);
+      ctx.beginPath(); ctx.moveTo(pr+2,0); ctx.lineTo(0,-pr-2); ctx.lineTo(-pr-2,0); ctx.lineTo(0,pr+2); ctx.closePath(); ctx.stroke();
+      ctx.restore();
+      const sae = Math.atan2(pcy-e.y, pcx-e.x);
+      ctx.fillStyle='#1a0a2e'; ctx.beginPath(); ctx.arc(e.x+Math.cos(sae)*5, e.y+Math.sin(sae)*5, pr*0.28, 0, 7); ctx.fill();
+      ctx.fillStyle='#ff77dd'; ctx.beginPath(); ctx.arc(e.x+Math.cos(sae)*7, e.y+Math.sin(sae)*7, pr*0.1, 0, 7); ctx.fill();
+    } else if(isCharger){
+      // Charger: مثلث أحمر — يندفع ناحية اللاعب
+      const ca = e._charging ? Math.atan2(e._cvy, e._cvx) : Math.atan2(pcy-e.y, pcx-e.x);
+      ctx.save(); ctx.translate(e.x,e.y); ctx.rotate(ca);
+      ctx.fillStyle=e._charging?'#ff4455':'#cc5533';
+      ctx.beginPath(); ctx.moveTo(pr+3,0); ctx.lineTo(-pr+3,-pr+2); ctx.lineTo(-pr+3,pr+2); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle='rgba(255,68,85,0.4)'; ctx.lineWidth=1.5;
+      ctx.beginPath(); ctx.moveTo(pr+5,0); ctx.lineTo(-pr+5,-pr-2); ctx.lineTo(-pr+5,pr+2); ctx.closePath(); ctx.stroke();
+      ctx.restore();
+      // HP bar
+      const bw=18,bh=3; ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(e.x-bw/2,e.y-pr-8,bw,bh);
+      ctx.fillStyle='#ff6644'; ctx.fillRect(e.x-bw/2,e.y-pr-8,bw*(e.hp/2),bh);
+    } else {
+      ctx.fillStyle=vertical?'#c774ff':'#ff9f43'; ctx.beginPath(); ctx.arc(e.x,e.y,pr,0,7); ctx.fill();
+      // HP bar للشوتير (2HP)
+      if(e.axis==='s'){ const bw=20,bh=3; ctx.fillStyle='rgba(0,0,0,0.5)'; ctx.fillRect(e.x-bw/2,e.y-pr-8,bw,bh);
+        ctx.fillStyle='#ff77dd'; ctx.fillRect(e.x-bw/2,e.y-pr-8,bw*(e.hp/2),bh); }
+      // شريط خارجي/طوق
+      ctx.strokeStyle=vertical?'rgba(199,116,255,0.3)':'rgba(255,159,67,0.3)'; ctx.lineWidth=2;
+      ctx.beginPath(); ctx.arc(e.x,e.y,pr+3,0,7); ctx.stroke();
+      const ea = Math.atan2(pcy-e.y, pcx-e.x);
+      const ed = Math.min(pr*0.35, 5);
+      const eox = Math.cos(ea)*ed, eoy = Math.sin(ea)*ed;
+      ctx.fillStyle=vertical?'#7a2fb0':'#b3541e';
+      ctx.beginPath(); ctx.arc(e.x+eox, e.y+eoy, pr*0.35, 0, 7); ctx.fill();
+      // بؤبؤ صغير
+      ctx.fillStyle='#1a0505';
+      ctx.beginPath(); ctx.arc(e.x+Math.cos(ea)*(ed+3), e.y+Math.sin(ea)*(ed+3), pr*0.12, 0, 7); ctx.fill();
+    }
+  }
 
-  // طلقات العدو
-  for(const b of G.ebullets){ ctx.fillStyle='#ff884d'; ctx.beginPath(); ctx.arc(b.x,b.y,CFG.EBULLET_R,0,7); ctx.fill();
-    ctx.globalAlpha=0.3; ctx.beginPath(); ctx.arc(b.x,b.y,CFG.EBULLET_R+3,0,7); ctx.fill(); ctx.globalAlpha=1; }
+  // طلقات العدو — heart-shaped core + trail glow
+  for(const b of G.ebullets){
+    const col = b._purple?'#c58bff':'#ff884d';
+    // Trail
+    ctx.globalAlpha=0.2; ctx.fillStyle=col;
+    ctx.beginPath(); ctx.arc(b.x-b.vx*0.5, b.y-b.vy*0.5, CFG.EBULLET_R*0.8, 0, 7); ctx.fill();
+    ctx.globalAlpha=0.4; ctx.beginPath(); ctx.arc(b.x-b.vx*0.3, b.y-b.vy*0.3, CFG.EBULLET_R*1.2, 0, 7); ctx.fill();
+    ctx.globalAlpha=1;
+    // Core
+    ctx.fillStyle=col; ctx.beginPath(); ctx.arc(b.x,b.y,CFG.EBULLET_R,0,7); ctx.fill(); }
+
+  // Power-ups
+  for(const u of G.powerups){
+    const by = u.y + Math.sin(u.bob)*3;
+    ctx.globalAlpha = Math.min(1, u.life/80);
+    if(u.type==='shield'){
+      ctx.fillStyle='#7ac7ff'; ctx.save(); ctx.translate(u.x,by); ctx.rotate(frameCount*0.05);
+      ctx.beginPath(); ctx.moveTo(0,-10); ctx.lineTo(10,0); ctx.lineTo(0,10); ctx.lineTo(-10,0); ctx.closePath(); ctx.fill();
+      ctx.strokeStyle='#cfe4ff'; ctx.lineWidth=2; ctx.strokeRect(-12,-12,24,24);
+      ctx.restore();
+    } else {
+      ctx.fillStyle='#ffd94d'; ctx.save(); ctx.translate(u.x,by); ctx.rotate(frameCount*0.04);
+      ctx.beginPath(); ctx.moveTo(0,-10); ctx.lineTo(4,-4); ctx.lineTo(10,-2); ctx.lineTo(5,2); ctx.lineTo(7,10);
+      ctx.lineTo(0,5); ctx.lineTo(-7,10); ctx.lineTo(-5,2); ctx.lineTo(-10,-2); ctx.lineTo(-4,-4); ctx.closePath(); ctx.fill();
+      ctx.restore();
+    }
+    ctx.globalAlpha = 1;
+  }
 
   // الزعيم
   if(G.boss&&G.boss.alive) drawBoss(G.boss);
@@ -942,35 +1275,114 @@ function render(){
   for(const p of G.particles){ ctx.globalAlpha=Math.max(0,p.life); ctx.fillStyle=p.col; ctx.fillRect(p.x-p.size/2,p.y-p.size/2,p.size,p.size); }
   ctx.globalAlpha=1;
 
+  // حلقات الصدمة (expanding rings)
+  for(const r of G.rings){
+    const t = 1 - r.life / r.maxLife;
+    ctx.globalAlpha = 1 - t;
+    ctx.strokeStyle = r.col; ctx.lineWidth = r.width * (1 - t);
+    ctx.beginPath(); ctx.arc(r.x, r.y, r.r, 0, 7); ctx.stroke();
+  }
+  ctx.globalAlpha = 1;
+
+  // أثر الـ dash: ghosts متعددة
+  for(const tr of G.trails){
+    const p = G.player, S = CFG.PSIZE;
+    ctx.globalAlpha = tr.life * 0.25;
+    ctx.fillStyle = '#aae0ff';
+    ctx.fillRect(tr.x, tr.y, S, S);
+  }
+  ctx.globalAlpha = 1;
+
+  // Glow pass (additive blending للعناصر المضيئة)
+  ctx.save();
+  ctx.globalCompositeOperation = 'lighter';
+  // Glow للرصاصات
+  for(const b of G.bullets){
+    ctx.fillStyle = 'rgba(255,224,138,0.25)';
+    ctx.beginPath(); ctx.arc(b.x, b.y, CFG.BULLET_R * 4, 0, 7); ctx.fill();
+  }
+  // Glow لرصاص الأعداء
+  for(const b of G.ebullets){
+    ctx.fillStyle = b._purple ? 'rgba(197,139,255,0.25)' : 'rgba(255,136,77,0.25)';
+    ctx.beginPath(); ctx.arc(b.x, b.y, CFG.EBULLET_R * 3, 0, 7); ctx.fill();
+  }
+  // Glow للاعب أثناء الاندفاع
+  if(G.player.dash>0){ const p=G.player, S=CFG.PSIZE, cx2=p.x+S/2, cy2=p.y+S/2;
+    ctx.fillStyle = 'rgba(170,224,255,0.15)';
+    ctx.beginPath(); ctx.arc(cx2, cy2, S*1.2, 0, 7); ctx.fill(); }
+  // Glow للأسرار
+  for(const s of L.secrets){ if(s.found) continue;
+    const dx=(G.player.x+CFG.PSIZE/2)-s.x, dy=(G.player.y+CFG.PSIZE/2)-s.y;
+    if(dx*dx+dy*dy < 160*160){
+      ctx.fillStyle = 'rgba(255,217,77,0.08)';
+      ctx.beginPath(); ctx.arc(s.x, s.y, 18 + 4*Math.sin(frameCount*0.08), 0, 7); ctx.fill(); } }
+  // Glow للنجمة
+  if(L.star && G.gateOpen){ const st=L.star;
+    ctx.fillStyle = 'rgba(255,217,77,0.15)';
+    ctx.beginPath(); ctx.arc(st.x, st.y, 36, 0, 7); ctx.fill(); }
+  ctx.restore();
+
   // اللاعب + المسدس
   if(G.state!=='dead'){ const p=G.player, S=CFG.PSIZE;
     const rot=(1-p.rotT)*Math.PI*p.facing, sq=1-p.squash*0.3;
     const idleY = Math.sin(p.idleBob)*1.2;
     const cx=p.x+S/2, cy=p.y+S/2+idleY;
-    // ارتداد المسدس عند الإطلاق
+    const headDir = G.gravDir>0 ? -1 : 1;  // الرأس ناحية الجاذبية المعاكسة
     const kick = p.fireCD > 6 ? (p.fireCD - 6)*0.7 : 0;
-    // ماسورة المسدس ناحية التصويب
+    // مسدس
     ctx.save(); ctx.translate(cx,cy); ctx.rotate(p.aim);
     ctx.fillStyle='#0b2a3a'; ctx.fillRect(6-kick,-3.5,18,7);
     ctx.fillStyle='#cfe4ff'; ctx.fillRect(20-kick,-3.5,4,7); ctx.restore();
-    // الجسم + الرجلين
+    // الجسم بالكامل مع flip/squash
     ctx.save(); ctx.translate(cx,cy); ctx.rotate(rot); ctx.scale(1/sq*(p.squash>0?1.15:1),sq);
-    ctx.fillStyle=th.player; ctx.fillRect(-S/2,-S/2,S,S);
-    // الرجلين — تهتز أثناء الركض
-    const legSwing = p.grounded ? Math.sin(p.idleBob*2)*4 : 0;
-    ctx.fillStyle='#0b2a3a';
-    if(G.gravDir>0){
-      ctx.fillRect(-6, S/2-2, 4, 6+legSwing);
-      ctx.fillRect(2, S/2-2, 4, 6-legSwing);
+    // بدلة (جسم) — لون يتغير حسب killStreak
+    const ks = Math.min(p.killStreak, 8) / 8;
+    const pCol = ks > 0 ? `rgb(${Math.round(lerp(77,255,ks))},${Math.round(lerp(227,217,ks))},${Math.round(lerp(255,77,ks))})` : th.player;
+    ctx.fillStyle=pCol; ctx.fillRect(-S/2,-S/2,S,S);
+    // إطار خوذة — شريط داكن في منطقة الرأس
+    ctx.fillStyle='rgba(0,0,0,0.15)';
+    const headH = 10;
+    if(headDir<0) ctx.fillRect(-S/2, -S/2, S, headH);
+    else ctx.fillRect(-S/2, S/2-headH, S, headH);
+    // أحذية — زوايا سفلية داكنة
+    ctx.fillStyle='rgba(0,0,0,0.25)'; const bSize=5;
+    if(headDir<0){
+      ctx.fillRect(-S/2, S/2-bSize, bSize, bSize);
+      ctx.fillRect(S/2-bSize, S/2-bSize, bSize, bSize);
     } else {
-      ctx.fillRect(-6, -S/2-8-legSwing, 4, 6+legSwing);
-      ctx.fillRect(2, -S/2-8+legSwing, 4, 6-legSwing);
+      ctx.fillRect(-S/2, -S/2, bSize, bSize);
+      ctx.fillRect(S/2-bSize, -S/2, bSize, bSize);
     }
-    // العينين
-    ctx.fillStyle='#0b2a3a'; const ey=G.gravDir>0?-4:1;
-    ctx.fillRect(p.facing*4-2,ey,3.5,3.5); ctx.fillRect(p.facing*10-2,ey,3.5,3.5); ctx.restore();
+    // عيون — visor متوهج
+    const ey = G.gravDir>0 ? -5 : 5;
+    const eGlow = 0.2+0.1*Math.sin(p.idleBob);
+    // وهج خلف العيون
+    ctx.fillStyle=`rgba(255,255,255,${eGlow})`;
+    ctx.fillRect(p.facing*4-4, ey-2, 10, 5);
+    // بياض العين
+    ctx.fillStyle='#eaf3ff';
+    ctx.fillRect(p.facing*4-2, ey-1, 3.5, 3);
+    ctx.fillRect(p.facing*10-2, ey-1, 3.5, 3);
+    // وهج العيون من killStreak
+    if(ks>0.3){ ctx.globalAlpha=ks*0.3; ctx.fillStyle='#ffd94d';
+      ctx.fillRect(p.facing*4-4, ey-2, 10, 5); ctx.globalAlpha=1; }
+    // بؤبؤ (يتجه ناحية aim)
+    const pa = Math.atan2(Math.sin(p.aim), Math.cos(p.aim)*p.facing);
+    ctx.fillStyle='#0b2a3a';
+    const px = Math.cos(pa)*1.2, py = Math.sin(pa)*0.8;
+    ctx.fillRect(p.facing*4-1+px, ey-0.5+py, 2, 2);
+    ctx.fillRect(p.facing*10-1+px, ey-0.5+py, 2, 2);
+    ctx.restore();
   }
   ctx.restore(); // كاميرا
+
+  // Red vignette عند الضرر
+  if(G.dmgFlash>0){ G.dmgFlash--;
+    const vg = ctx.createRadialGradient(CFG.W/2,CFG.H/2,CFG.H*0.2,CFG.W/2,CFG.H/2,CFG.H*0.7);
+    vg.addColorStop(0,'rgba(0,0,0,0)');
+    vg.addColorStop(1,`rgba(255,50,50,${G.dmgFlash/40})`);
+    ctx.fillStyle=vg; ctx.fillRect(0,0,CFG.W,CFG.H);
+  }
 
   // crosshair عند الماوس (إحداثيات الشاشة)
   if(G.state==='play'){ ctx.strokeStyle='rgba(255,240,180,0.9)'; ctx.lineWidth=1.5;
@@ -980,32 +1392,53 @@ function render(){
 
   renderHUD();
   renderUI();
+
+  // Screen transition overlay
+  if(G.transition.alpha > 0){
+    ctx.save();
+    ctx.globalAlpha = G.transition.alpha * 0.6;
+    ctx.fillStyle = '#060a12';
+    ctx.fillRect(0, 0, CFG.W, CFG.H);
+    ctx.restore();
+  }
 }
 
 function drawBoss(bo){
   if(bo.type==='tyrant') return drawTyrant(bo);
   const flash = bo.hitFlash>0, warn = bo.windup>0;
   ctx.save(); ctx.translate(bo.x,bo.y);
+  // هالة خارجية متوهجة
   const gl = warn ? (0.4+0.4*Math.sin(frameCount*0.6)) : 0.2;
   ctx.globalAlpha=gl; ctx.fillStyle= warn?'#ff5566':'#ff9f43'; ctx.beginPath(); ctx.arc(0,0,bo.r+12,0,7); ctx.fill(); ctx.globalAlpha=1;
+  // حلقة طاقة (طور 2)
+  if(bo.phase===2){ ctx.strokeStyle='rgba(255,95,109,0.5)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(0,0,bo.r+6+2*Math.sin(frameCount*0.1),0,7); ctx.stroke(); }
+  // الجسم الرئيسي
   ctx.fillStyle= flash?'#ffffff' : (bo.phase===2?'#ff5f6d':'#e0673a'); ctx.beginPath(); ctx.arc(0,0,bo.r,0,7); ctx.fill();
   // نواة
   ctx.fillStyle='#2a0d0d'; ctx.beginPath(); ctx.arc(0,0,bo.r*0.5,0,7); ctx.fill();
+  // حلقة داخلية حول العين
+  ctx.strokeStyle='rgba(42,13,13,0.5)'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(0,0,bo.r*0.28,0,7); ctx.stroke();
   // وهج العين
   ctx.fillStyle= warn?'#ffe14d':'#ffb0b0'; ctx.beginPath(); ctx.arc(0,0,bo.r*0.22,0,7); ctx.fill();
   // بؤبؤ يتابع اللاعب
   const ba = Math.atan2(G.player.y+CFG.PSIZE/2-bo.y, G.player.x+CFG.PSIZE/2-bo.x);
   ctx.fillStyle='#1a0505'; ctx.beginPath(); ctx.arc(Math.cos(ba)*bo.r*0.2, Math.sin(ba)*bo.r*0.2, bo.r*0.1, 0, 7); ctx.fill();
+  // بصيص ضوء صغير في العين
+  ctx.fillStyle='rgba(255,255,255,0.4)'; ctx.beginPath(); ctx.arc(Math.cos(ba+0.5)*bo.r*0.16, Math.sin(ba+0.5)*bo.r*0.16, bo.r*0.04, 0, 7); ctx.fill();
   ctx.restore();
 }
 // الطاغية: نجمة/ماسة شائكة بنفسجية دوّارة بعين — شكل مختلف تماماً عن الحارس
 function drawTyrant(bo){
   const flash=bo.hitFlash>0, warn=bo.windup>0;
-  // لون التحذير يختلف حسب نوع الهجمة القادمة (نبضة الجاذبية = بنفسجي وهّاج)
   const warnCol = bo.atkKind===2 ? '#c58bff' : '#ff77dd';
   ctx.save(); ctx.translate(bo.x,bo.y);
+  // هالة خارجية متوهجة
   const gl = warn ? (0.35+0.45*Math.sin(frameCount*0.7)) : 0.18;
   ctx.globalAlpha=gl; ctx.fillStyle=warn?warnCol:'#8a4dff'; ctx.beginPath(); ctx.arc(0,0,bo.r+16,0,7); ctx.fill(); ctx.globalAlpha=1;
+  // حلقة طاقة (طور 2)
+  if(bo.phase===2){ ctx.strokeStyle='rgba(179,77,255,0.4)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(0,0,bo.r+8+3*Math.sin(frameCount*0.12),0,7); ctx.stroke(); }
   // جسم نجمي دوّار بأشواك
   ctx.rotate(bo.spin);
   const spikes=8, rOut=bo.r, rIn=bo.r*0.6;
@@ -1013,20 +1446,29 @@ function drawTyrant(bo){
   for(let i=0;i<spikes*2;i++){ const rr=i%2===0?rOut:rIn, a=i*Math.PI/spikes; ctx[i===0?'moveTo':'lineTo'](Math.cos(a)*rr,Math.sin(a)*rr); }
   ctx.closePath();
   ctx.fillStyle= flash?'#ffffff' : (bo.phase===2?'#b34dff':'#7a3ad6'); ctx.fill();
+  // حواف مضيئة للأشواك
+  ctx.strokeStyle= flash?'rgba(255,255,255,0.6)':'rgba(200,150,255,0.2)'; ctx.lineWidth=1.5;
+  ctx.beginPath();
+  for(let i=0;i<spikes*2;i++){ const rr=i%2===0?rOut+2:rIn-2, a=i*Math.PI/spikes; ctx[i===0?'moveTo':'lineTo'](Math.cos(a)*rr,Math.sin(a)*rr); }
+  ctx.stroke();
   ctx.rotate(-bo.spin);
-  // نواة داكنة + عين
+  // نواة
   ctx.fillStyle='#1a0a2e'; ctx.beginPath(); ctx.arc(0,0,bo.r*0.5,0,7); ctx.fill();
+  ctx.strokeStyle='rgba(26,10,46,0.6)'; ctx.lineWidth=1.5; ctx.beginPath(); ctx.arc(0,0,bo.r*0.3,0,7); ctx.stroke();
+  // وهج العين
   ctx.fillStyle= warn?'#ffe14d':'#e0b0ff'; ctx.beginPath(); ctx.arc(0,0,bo.r*0.24,0,7); ctx.fill();
   // بؤبؤ يتابع اللاعب
   const ta = Math.atan2(G.player.y+CFG.PSIZE/2-bo.y, G.player.x+CFG.PSIZE/2-bo.x);
   ctx.fillStyle='#0a0520'; ctx.beginPath(); ctx.arc(Math.cos(ta)*bo.r*0.18, Math.sin(ta)*bo.r*0.18, bo.r*0.09, 0, 7); ctx.fill();
+  // بصيص ضوء
+  ctx.fillStyle='rgba(255,255,255,0.3)'; ctx.beginPath(); ctx.arc(Math.cos(ta+0.6)*bo.r*0.14, Math.sin(ta+0.6)*bo.r*0.14, bo.r*0.04, 0, 7); ctx.fill();
   ctx.restore();
 }
 
 function renderHUD(){
   if(G.state!=='play'&&G.state!=='dead'&&G.state!=='paused'&&G.state!=='settings') return;
   const L=G.level; ctx.save();
-  ctx.shadowColor='rgba(0,0,0,0.85)'; ctx.shadowBlur=5; ctx.fillStyle='#cfe4ff'; ctx.font='15px "Segoe UI",sans-serif';
+  ctx.shadowColor='rgba(0,0,0,0.85)'; ctx.shadowBlur=8; ctx.fillStyle='#cfe4ff'; ctx.font='15px "Segoe UI",sans-serif';
   const R=isRTL();
   ctx.textAlign = R?'right':'left';
   const xStart = R?CFG.W-14:14;
@@ -1034,11 +1476,33 @@ function renderHUD(){
   ctx.textAlign = R?'left':'right';
   const xEnd = R?14:CFG.W-14;
   ctx.fillText(`${tr('deaths')}: ${G.deaths}`, xEnd, 22);
-  // عدّاد الأعداء والذخيرة (وسط)
+  // عدّاد الأعداء + Heat bar
+  const p=G.player;
   ctx.textAlign='center';
-  if(L.boss){ /* شريط الزعيم بدل العداد */ }
-  else { ctx.fillText(`${tr('enemies')}: ${liveEnemies()}   ·   ${tr('ammo')}: ${G.ammo}`, CFG.W/2, 22); }
+  if(!L.boss) ctx.fillText(`${tr('enemies')}: ${liveEnemies()}`, CFG.W/2, 22);
   if(Snd.muted){ ctx.fillText(tr('muted'), CFG.W/2, 40); }
+  // Heat bar
+  const hx=CFG.W/2-70, hy=33, hw=140, hh=8;
+  ctx.shadowBlur=0;
+  ctx.fillStyle='rgba(60,60,80,0.5)'; ctx.fillRect(hx,hy,hw,hh);
+  const heatRatio = p.overheated ? 1 : p.heat/CFG.HEAT_MAX;
+  const hCol = p.overheated ? '#ff4455' : (heatRatio>0.7 ? '#ff8844' : '#4de3ff');
+  ctx.fillStyle=hCol; ctx.fillRect(hx,hy,hw*heatRatio,hh);
+  ctx.strokeStyle='rgba(150,180,220,0.3)'; ctx.lineWidth=1; ctx.strokeRect(hx,hy,hw,hh);
+
+  // توقيت المستوى
+  const secs = Math.floor(G.time/60);
+  ctx.shadowBlur=8;
+  ctx.fillStyle='rgba(207,228,255,0.5)'; ctx.font='14px "Segoe UI",sans-serif'; ctx.textAlign=R?'left':'right';
+  ctx.fillText(`${Math.floor(secs/60)}:${(secs%60).toString().padStart(2,'0')}`, R?CFG.W-14:14, 38);
+
+  // مؤشرات الدرع و rapid fire
+  if(p.shield>0){ ctx.fillStyle='#7ac7ff'; ctx.globalAlpha=0.6+0.3*Math.sin(frameCount*0.1);
+    ctx.fillRect(14,CFG.H-20, 20,14); ctx.fillStyle='#eaf3ff'; ctx.globalAlpha=1;
+    ctx.font='12px "Segoe UI",sans-serif'; ctx.fillText('SHIELD', 38, CFG.H-9); }
+  if(p.rapid>0){ ctx.fillStyle='#ffd94d'; ctx.globalAlpha=0.6+0.3*Math.sin(frameCount*0.1);
+    ctx.fillRect(R?CFG.W-34:14,CFG.H-36, 20,14); ctx.fillStyle='#eaf3ff'; ctx.globalAlpha=1;
+    ctx.font='12px "Segoe UI",sans-serif'; ctx.fillText('RAPID', R?CFG.W-56:38, CFG.H-25); }
 
   // شريط صحة الزعيم
   if(L.boss && G.boss){ const bw=360, bx=CFG.W/2-bw/2, by=32;
@@ -1046,17 +1510,15 @@ function renderHUD(){
     ctx.fillStyle='#4a1520'; ctx.fillRect(bx,by,bw,10);
     ctx.fillStyle= G.boss.phase===2?'#ff5f6d':'#ff9f43'; ctx.fillRect(bx,by,bw*Math.max(0,G.boss.hp/G.boss.maxHp),10);
     ctx.fillStyle='#eaf3ff'; ctx.textAlign='center'; ctx.font='bold 14px "Segoe UI",sans-serif'; ctx.fillText(tr('boss'), CFG.W/2, by-8);
-    // الذخيرة = صحة الزعيم؛ اعرضها وحذّر لما تخلص
-    ctx.font='15px "Segoe UI",sans-serif'; ctx.fillStyle= G.ammo<=0?'#ff9f9f':'#cfe4ff';
-    ctx.fillText(`${tr('ammo')}: ${G.ammo}`, CFG.W/2, by+30); }
+    ctx.shadowBlur=8; }
 
   if(G.lvl===0){ ctx.globalAlpha=0.5; ctx.textAlign='center'; ctx.font='13px "Segoe UI",sans-serif';
     ctx.fillText(tr('hintCombat'), CFG.W/2, CFG.H-30); ctx.fillText(tr('hintKeys'), CFG.W/2, CFG.H-12); }
 
-  // رسالة وسط الشاشة (بوابة/ذخيرة)
+  // رسالة وسط الشاشة (overheat/بوابة)
   if(G.msgT>0){ ctx.globalAlpha=Math.min(1,G.msgT/30); ctx.font='bold 20px "Segoe UI",sans-serif';
-    ctx.fillStyle= G.ammo<=0?'#ff9f9f':'#9dffce'; ctx.textAlign='center';
-    ctx.fillText(G.ammo<=0?tr('reload'):(G.gateOpen?tr('exitOpen'):tr('clearAll')), CFG.W/2, 90); ctx.globalAlpha=1; }
+    ctx.fillStyle= p.overheated?'#ff4455':'#9dffce'; ctx.textAlign='center';
+    ctx.fillText(p.overheated?tr('reload'):(G.gateOpen?tr('exitOpen'):tr('clearAll')), CFG.W/2, 90); ctx.globalAlpha=1; }
   else if(G.state==='play' && !G.level.boss && !G.gateOpen && liveEnemies()>0){
     ctx.globalAlpha=0.4; ctx.font='13px "Segoe UI",sans-serif'; ctx.fillStyle='#cfe4ff'; ctx.textAlign='center';
     ctx.fillText(tr('clearAll'), CFG.W/2, 90); ctx.globalAlpha=1; }
@@ -1071,9 +1533,12 @@ function renderHUD(){
 let uiButtons=[]; // {x,y,w,h,fn}
 function button(x,y,w,h,label,fn,opts={}){
   const hot = mouse.x>=x&&mouse.x<=x+w&&mouse.y>=y&&mouse.y<=y+h;
-  ctx.fillStyle = hot? 'rgba(77,227,255,0.18)':'rgba(120,150,190,0.10)';
+  ctx.fillStyle = hot? 'rgba(77,227,255,0.22)':'rgba(120,150,190,0.10)';
   ctx.strokeStyle = hot? '#4de3ff':'rgba(150,180,220,0.45)'; ctx.lineWidth=1.5;
+  ctx.shadowBlur = hot ? 18 : 0;
+  ctx.shadowColor = hot ? 'rgba(77,227,255,0.3)' : 'transparent';
   ctx.fillRect(x,y,w,h); ctx.strokeRect(x,y,w,h);
+  ctx.shadowBlur = 0;
   ctx.fillStyle= opts.color||'#eaf3ff'; ctx.font=opts.font||'18px "Segoe UI",sans-serif'; ctx.textAlign='center';
   ctx.textBaseline='middle'; ctx.fillText(label, x+w/2, y+h/2); ctx.textBaseline='alphabetic';
   uiButtons.push({x,y,w,h,fn});
@@ -1113,18 +1578,67 @@ function renderUI(){
     } else {
       button(CFG.W/2-75,395,150,48, tr('back'),()=>{ G.state='menu'; });
     }
+  } else if(G.state==='deathscreen'){
+    ctx.fillStyle='rgba(6,10,18,0.7)'; ctx.fillRect(0,0,CFG.W,CFG.H);
+    ctx.fillStyle='#ff4455'; ctx.font='bold 40px "Segoe UI",sans-serif'; ctx.fillText('✕', CFG.W/2, 180);
+    ctx.fillStyle='#cfe4ff'; ctx.font='18px "Segoe UI",sans-serif'; ctx.fillText(`${tr('deaths')}: ${G.deaths}`, CFG.W/2, 230);
+    ctx.fillStyle='#8fb3d9'; ctx.font='16px "Segoe UI",sans-serif'; ctx.fillText(`${tr('press')} R`, CFG.W/2, 270);
+    if(KEYS.restartPressed || G.stateT>120){ KEYS.restartPressed=false; respawn(); G.state='play'; }
+  } else if(G.state==='story'){
+    const STORIES = [
+      { ar:'النظام يستجيب. أنت الجندي رقم 7. منصة التدريب VR تفعّل.\nتجاوز المحاكاة. أثبت جدارتك.',
+        en:'System online. You are Unit 7. VR training platform activated.\nComplete the simulation. Prove your worth.' },
+      { ar:'التهديد يتصاعد. البروتوكولات الأمنية تُكسر.\nالحارس مجرد بداية. الطاغية ينتظر.',
+        en:'Threat level rising. Security protocols breached.\nThe Warden is only the beginning. The Tyrant awaits.' },
+      { ar:'المواجهة الأخيرة. الطاغية — فايروس في صلب النظام.\nدمّره لتحرير المنصة. أو يمحوك ويبدأ من جديد.',
+        en:'Final confrontation. The Tyrant — a virus in the system core.\nDestroy it to free the platform. Or be erased.' },
+    ];
+    const s = STORIES[G.storyIdx];
+    ctx.fillStyle='rgba(6,10,18,0.92)'; ctx.fillRect(0,0,CFG.W,CFG.H);
+    ctx.fillStyle='#4de3ff'; ctx.font='bold 20px "Segoe UI",sans-serif';
+    const lines = (LANG==='ar'?s.ar:s.en).split('\n');
+    lines.forEach((l,i)=>ctx.fillText(l, CFG.W/2, 190+i*40));
+    ctx.fillStyle='#8fb3d9'; ctx.font='16px "Segoe UI",sans-serif'; ctx.fillText(`${tr('press')} →`, CFG.W/2, 340);
+    if(G.stateT++ > 30 && (KEYS.restartPressed || G.stateT>600)){ KEYS.restartPressed=false; G.state='levelcomplete'; G.stateT=0; } else if(G.stateT<30) G.stateT++;
   } else if(G.state==='levelend'){
-    ctx.globalAlpha=1; ctx.fillStyle='#eaf3ff'; ctx.font='bold 40px "Segoe UI",sans-serif';
+    ctx.globalAlpha=Math.min(1,G.stateT/20); ctx.fillStyle='#eaf3ff'; ctx.font='bold 40px "Segoe UI",sans-serif';
     ctx.fillText(tr('done'), CFG.W/2, CFG.H/2-20);
+  } else if(G.state==='levelcomplete'){
+    ctx.fillStyle='rgba(6,10,18,0.85)'; ctx.fillRect(0,0,CFG.W,CFG.H);
+    ctx.fillStyle='#ffd94d'; ctx.font='bold 46px "Segoe UI",sans-serif'; ctx.fillText(LEVELS[G.lvl].name[LANG], CFG.W/2, 140);
+    ctx.fillStyle='#cfe4ff'; ctx.font='20px "Segoe UI",sans-serif';
+    const ss=Math.floor(G.time/3600), ms=Math.floor((G.time/60)%60);
+    ctx.fillText(`${tr('time')}: ${ss}:${ms<10?'0':''}${ms}  ·  ${tr('deaths')}: ${G.deaths}`, CFG.W/2, 200);
+    // Rank: Gold(0) / Silver / Bronze / None
+    const secs = G.time/60;
+    const rank = secs<30 && G.deaths===0 ? 0 : (secs<60 && G.deaths<3 ? 1 : (G.deaths<10 ? 2 : -1));
+    const rankNames = ['★★★','★★☆','★☆☆','—'];
+    const rankCols = ['#ffd94d','#c0c0c0','#b87333','#5a6f8a'];
+    ctx.fillStyle=rankCols[rank+1]; ctx.font='bold 32px "Segoe UI",sans-serif'; ctx.fillText(rankNames[rank+1], CFG.W/2, 105);
+    // Best time
+    if(G.bestTimes[G.lvl]){ const bs=Math.floor(G.bestTimes[G.lvl]/3600), bm=Math.floor((G.bestTimes[G.lvl]/60)%60);
+      ctx.fillStyle='#ffd94d'; ctx.fillText(`Best: ${bs}:${bm<10?'0':''}${bm}`, CFG.W/2, 230); }
+    if(G.lvl+1<LEVELS.length)
+      button(CFG.W/2-120,280,240,54, `${tr('level')} ${G.lvl+2} →`,()=>loadLevel(G.lvl+1),{font:'bold 22px',color:'#4de3ff'});
+    else
+      button(CFG.W/2-120,280,240,54, tr('win'),()=>{ G.state='won'; },{font:'bold 22px',color:'#ffd94d'});
+    button(CFG.W/2-120,350,240,44, tr('restart'),()=>loadLevel(G.lvl));
+    button(CFG.W/2-120,410,240,44, tr('toMenu'),()=>G.state='menu');
   } else if(G.state==='won'){
-    ctx.fillStyle='rgba(6,10,18,0.8)'; ctx.fillRect(0,0,CFG.W,CFG.H);
-    ctx.fillStyle='#ffd94d'; ctx.font='bold 56px "Segoe UI",sans-serif'; ctx.fillText(tr('win'), CFG.W/2, 190);
-    ctx.fillStyle='#cfe4ff'; ctx.font='22px "Segoe UI",sans-serif';
+    ctx.fillStyle='rgba(6,10,18,0.85)'; ctx.fillRect(0,0,CFG.W,CFG.H);
+    ctx.fillStyle='#ffd94d'; ctx.font='bold 52px "Segoe UI",sans-serif'; ctx.fillText(tr('win'), CFG.W/2, 140);
+    ctx.fillStyle='#cfe4ff'; ctx.font='20px "Segoe UI",sans-serif';
     const mm=Math.floor(G.time/3600), ss=Math.floor((G.time/60)%60);
-    ctx.fillText(`${tr('deaths')}: ${G.deaths}`, CFG.W/2, 260);
-    ctx.fillText(`${tr('time')}: ${mm}:${ss<10?'0':''}${ss}`, CFG.W/2, 295);
-    button(CFG.W/2-110,340,220,50, tr('fromStart'),()=>startGame());
-    button(CFG.W/2-110,400,220,42, tr('settings'),()=>{ G.settingsReturn='menu'; G.state='menu'; });
+    ctx.fillText(`${tr('deaths')}: ${G.deaths}`, CFG.W/2, 210);
+    ctx.fillText(`${tr('time')}: ${mm}:${ss<10?'0':''}${ss}`, CFG.W/2, 240);
+    const totalBest = G.bestTimes.reduce((a,b)=>a+(b||0), 0);
+    if(totalBest){ const bm=Math.floor(totalBest/3600), bs=Math.floor((totalBest/60)%60);
+      ctx.fillStyle='#ffd94d'; ctx.fillText(`Best: ${bm}:${bs<10?'0':''}${bs}`, CFG.W/2, 270); }
+    // Kills count
+    ctx.fillStyle='#8fb3d9'; ctx.font='16px "Segoe UI",sans-serif';
+    ctx.fillText(`${tr('enemies')}: ${G.player.totalKills}`, CFG.W/2, 305);
+    button(CFG.W/2-120,330,240,48, tr('fromStart'),()=>startGame(),{font:'bold 20px',color:'#4de3ff'});
+    button(CFG.W/2-120,390,240,42, tr('settings'),()=>{ G.settingsReturn='menu'; G.state='menu'; });
   }
   ctx.restore();
 }
@@ -1143,7 +1657,7 @@ function slider(label,val,y,setter){
 }
 
 /* ————————————————— الإدخال ————————————————— */
-const KEYS={ left:false, right:false, flipPressed:false, firePressed:false };
+const KEYS={ left:false, right:false, flipPressed:false, firePressed:false, dashPressed:false, restartPressed:false };
 const mouse={ x:CFG.W/2, y:CFG.H/2 };
 
 function firstInteract(){ Snd.init(); Snd.resume(); }
@@ -1159,7 +1673,8 @@ function handleKey(code,down,repeat){
     case 'ArrowLeft': case 'KeyA': KEYS.left=down; break;
     case 'ArrowRight': case 'KeyD': KEYS.right=down; break;
     case 'Space': case 'ArrowUp': case 'KeyW': if(down&&!repeat) KEYS.flipPressed=true; break;
-    case 'KeyR': if(down&&!repeat){ if(G.state==='won') startGame(); else if(G.state==='play'||G.state==='dead') loadLevel(G.lvl); } break;
+    case 'ShiftLeft': case 'ShiftRight': if(down&&!repeat) KEYS.dashPressed=true; break;
+    case 'KeyR': if(down&&!repeat){ if(G.state==='won') startGame(); else if(G.state==='play'||G.state==='dead') loadLevel(G.lvl); else if(G.state==='deathscreen'){ KEYS.restartPressed=true; } else if(G.state==='levelcomplete'){ if(G.lvl+1<LEVELS.length) loadLevel(G.lvl+1); else G.state='won'; } } break;
     case 'KeyM': if(down&&!repeat) Snd.toggleMute(); break;
   }
 }
@@ -1170,12 +1685,25 @@ function setMouse(e){ const r=cv.getBoundingClientRect(); mouse.x=(e.clientX-r.l
 window.addEventListener('mousemove', setMouse);
 window.addEventListener('mousedown', e=>{
   firstInteract(); setMouse(e);
-  // UI أولاً
   for(const b of uiButtons){ if(mouse.x>=b.x&&mouse.x<=b.x+b.w&&mouse.y>=b.y&&mouse.y<=b.y+b.h){ b.fn(); return; } }
   if(G.state==='play'){ KEYS.firePressed=true; }
+  else if(G.state==='deathscreen'){ KEYS.restartPressed=true; }
 });
-// منع قائمة الزر الأيمن عشان اللعب
+window.addEventListener('touchstart', e=>{
+  e.preventDefault(); firstInteract(); const t=e.changedTouches[0];
+  const r=cv.getBoundingClientRect(); mouse.x=(t.clientX-r.left)/r.width*CFG.W; mouse.y=(t.clientY-r.top)/r.height*CFG.H;
+  // UI buttons
+  for(const b of uiButtons){ if(mouse.x>=b.x&&mouse.x<=b.x+b.w&&mouse.y>=b.y&&mouse.y<=b.y+b.h){ b.fn(); return; } }
+  if(G.state==='play'){ KEYS.firePressed=true; }
+}, {passive:false});
+window.addEventListener('touchmove', e=>{
+  e.preventDefault(); const t=e.changedTouches[0];
+  const r=cv.getBoundingClientRect(); mouse.x=(t.clientX-r.left)/r.width*CFG.W; mouse.y=(t.clientY-r.top)/r.height*CFG.H;
+}, {passive:false});
 window.addEventListener('contextmenu', e=>e.preventDefault());
+window.addEventListener('resize', ()=>{
+  const r=cv.getBoundingClientRect(); mouse.x=Math.min(mouse.x, r.width); mouse.y=Math.min(mouse.y, r.height);
+});
 
 /* ————————————————— حلقة اللعبة 60Hz ————————————————— */
 const STEP=1000/60; let acc=0, last=performance.now();
@@ -1188,7 +1716,7 @@ requestAnimationFrame(frame);
 /* واجهة اختبار آلي (headless) */
 window.GAME={ G, CFG, LEVELS, KEYS, mouse, I18N,
   loadLevel, startGame, update, render, handleKey, parseLevel, doFlip, isSolid, tryShoot,
-  liveEnemies, refillAmmo, setLang:(l)=>{LANG=l;}, getLang:()=>LANG, Snd };
+  liveEnemies, setLang:(l)=>{LANG=l;}, getLang:()=>LANG, Snd };
 </script>
 </body>
 </html>
